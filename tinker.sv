@@ -315,7 +315,7 @@ module tinker_core(
         .L(id_L),
         .rtPassed(id_rtPassed)
     );
-    register_file regfile(
+    register_file reg_file(
         .clk(clk),
         .reset(reset),
         .write_enable(MEM_WB_aluWE),
