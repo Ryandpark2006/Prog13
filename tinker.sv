@@ -239,14 +239,6 @@ endmodule
   Stages: IF -> ID -> EX -> MEM -> WB
   No hazard/forwarding logic (assumes no data/control hazards).
 */
-
-
-/*
-  Vanilla 5-stage pipeline implementation of the Tinker processor.
-  Stages: IF -> ID -> EX -> MEM -> WB
-  No hazard/forwarding logic (assumes no data/control hazards).
-*/
-
 /*
   Vanilla 5-stage pipeline implementation of the Tinker processor.
   Stages: IF -> ID -> EX -> MEM -> WB
@@ -401,8 +393,8 @@ module tinker_core(
     //  EX Stage: ALU operations & branch decision
     // ------------------------------------------------------------------------------------------------
     wire [63:0] signExtL       = {{52{ID_EX_L[11]}}, ID_EX_L};
-    // FIXED: select register value when rtPassed, else literal
-    wire [63:0] alu_operand2   = ID_EX_rtPassed ? ID_EX_reg_val2 : signExtL;
+    // FIX: select literal when rtPassed, else register value
+    wire [63:0] alu_operand2   = ID_EX_rtPassed ? signExtL : ID_EX_reg_val2;
 
     wire [63:0] alu_result;
     wire        alu_writeEnable;
