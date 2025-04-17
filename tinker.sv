@@ -247,6 +247,12 @@ endmodule
   No hazard/forwarding logic (assumes no data/control hazards).
 */
 
+/*
+  Vanilla 5-stage pipeline implementation of the Tinker processor.
+  Stages: IF -> ID -> EX -> MEM -> WB
+  No hazard/forwarding logic (assumes no data/control hazards).
+*/
+
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -295,7 +301,7 @@ module tinker_core(
     // ------------
     wire [31:0] instruction_from_mem;
     wire [63:0] mem_rdata;
-    memory memory(
+    memory memory_inst(
         .pc(PC),
         .clk(clk),
         .reset(reset),
@@ -356,11 +362,9 @@ module tinker_core(
             IF_ID_IR  <= 32'b0;
             IF_ID_PC  <= 64'b0;
         end else begin
-            // Next PC: either branch target or sequential
-            PC       <= EX_MEM_changing_pc ? EX_MEM_updated_next : PC + 4;
-            // Latch fetched instruction & PC
-            IF_ID_IR <= instruction_from_mem;
-            IF_ID_PC <= PC;
+            PC        <= EX_MEM_changing_pc ? EX_MEM_updated_next : PC + 4;
+            IF_ID_IR  <= instruction_from_mem;
+            IF_ID_PC  <= PC;
         end
     end
 
@@ -389,7 +393,6 @@ module tinker_core(
             ID_EX_reg_val1  <= reg_val1;
             ID_EX_reg_val2  <= reg_val2;
             ID_EX_PC        <= IF_ID_PC;
-            // set memToReg for loads (opcode 5'b10000)
             ID_EX_memToReg  <= (controlSignal == 5'b10000);
         end
     end
@@ -397,8 +400,9 @@ module tinker_core(
     // ------------------------------------------------------------------------------------------------
     //  EX Stage: ALU operations & branch decision
     // ------------------------------------------------------------------------------------------------
-    wire [63:0] signExtL = {{52{ID_EX_L[11]}}, ID_EX_L};
-    wire [63:0] alu_operand2 = ID_EX_rtPassed ? signExtL : ID_EX_reg_val2;
+    wire [63:0] signExtL       = {{52{ID_EX_L[11]}}, ID_EX_L};
+    // FIXED: select register value when rtPassed, else literal
+    wire [63:0] alu_operand2   = ID_EX_rtPassed ? ID_EX_reg_val2 : signExtL;
 
     wire [63:0] alu_result;
     wire        alu_writeEnable;
