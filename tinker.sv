@@ -240,181 +240,124 @@ endmodule
 // ... include your existing ALU, FPU, instruction_decoder,
 // memory, register_file modules here ...
 //------------------------------------------------------
-
-module tinker_core(
-    input  wire       clk,
-    input  wire       reset,
-    output wire       hlt
+//------------------------------------------------------
+// tinker.sv: Top-level 5‑stage vanilla pipeline
+//------------------------------------------------------
+module tinker(
+    input  wire        clk,
+    input  wire        reset,
+    output wire        hlt
 );
-    // Program Counter
-    reg [63:0] pc;
-
-    // IF/ID pipeline registers
+    // --- IF/ID pipeline regs ---
     reg [63:0] IF_ID_PC;
     reg [31:0] IF_ID_IR;
 
-    // ID/EX pipeline registers
+    // --- ID/EX pipeline regs ---
     reg [63:0] ID_EX_PC;
     reg [63:0] ID_EX_A;
     reg [63:0] ID_EX_B;
     reg [63:0] ID_EX_rdVal;
     reg [4:0]  ID_EX_ctrl;
     reg [4:0]  ID_EX_rd;
-    reg        ID_EX_rtPassed;
+    wire [4:0] id_ctrl, id_rd, id_rs, id_rt;
+    wire [11:0] id_L;
+    wire       id_rtPassed;
+    wire [63:0] rf_val1, rf_val2, rf_rdVal, rf_r31;
 
-    // EX/MEM pipeline registers
-    reg [63:0] EX_MEM_ALUResult;
-    reg [63:0] EX_MEM_nextPC;
+    // --- EX/MEM pipeline regs ---
+    reg [63:0] EX_MEM_aluResult;
     reg [4:0]  EX_MEM_ctrl;
     reg [4:0]  EX_MEM_rd;
     reg        EX_MEM_aluWE;
-    reg        EX_MEM_memWE;
-    reg        EX_MEM_chgPC;
-    reg [31:0] EX_MEM_rwAddr;
-    reg [63:0] EX_MEM_rwVal;
+    reg        EX_MEM_memToReg;
+    reg [63:0] EX_MEM_memData;
 
-    // MEM/WB pipeline registers
-    reg [63:0] MEM_WB_memData;
-    reg [63:0] MEM_WB_ALUResult;
+    // --- MEM/WB pipeline regs ---
+    reg [63:0] MEM_WB_val;
     reg [4:0]  MEM_WB_ctrl;
     reg [4:0]  MEM_WB_rd;
-    reg        MEM_WB_aluWE;
-    reg        MEM_WB_memToReg;
+    reg        MEM_WB_we;
 
-    // Wires for stage interconnects
-    wire [31:0] instr;
-    wire [63:0] mem_rdata;
-    wire        alu_we, alu_mem_we, alu_chg_pc;
-    wire [63:0] alu_result, fpu_result, updated_next_pc;
-    wire [31:0] alu_rwAddr;
-    wire [63:0] alu_rwVal;
-    wire [4:0]  id_ctrl, id_rd, id_rs, id_rt;
-    wire [11:0] id_L;
-    wire        id_rtPassed;
-    wire [63:0] reg_val1, reg_val2, rdVal, r31_val;
+    // Program counter
+    wire [63:0] next_pc;
+    wire        ex_chgPC;
 
-    // Fetch stage: instruction memory
-    memory memory(
-        .pc(pc),
-        .clk(clk),
-        .reset(reset),
-        .mem_write_enable(EX_MEM_memWE),
-        .rw_val(EX_MEM_rwVal),
-        .rw_addr(EX_MEM_rwAddr),
-        .instruction(instr),
-        .r_out(mem_rdata)
+    // --- Instantiate IF stage (fetch instruction & PC update) ---
+    // Memory module also lives in IF stage to fetch instruction
+    memory memory_inst(
+        .pc               (IF_ID_PC),
+        .clk              (clk),
+        .reset            (reset),
+        .mem_write_enable (EX_MEM_memToReg && !EX_MEM_ctrl==5'b10011), // store from EX stage
+        .rw_val           (/* from EX_MEM */),
+        .rw_addr          (/* from EX_MEM */),
+        .instruction      (IF_ID_IR),
+        .r_out            (EX_MEM_memData)   // routed through pipeline regs
+    );
+    fetch_control fc(
+        .clk(clk), .reset(reset),
+        .changing_pc(ex_chgPC), .next_pc(next_pc), .pc(IF_ID_PC)
     );
 
-    // Decode stage
-    instruction_decoder dec(
+    // --- Instantiate ID stage ---
+    instruction_decoder idec(
         .instruction(IF_ID_IR),
         .controlSignal(id_ctrl),
-        .rd(id_rd),
-        .rs(id_rs),
-        .rt(id_rt),
-        .L(id_L),
-        .rtPassed(id_rtPassed)
+        .rd(id_rd), .rs(id_rs), .rt(id_rt),
+        .L(id_L), .rtPassed(id_rtPassed)
     );
     register_file reg_file(
-        .clk(clk),
-        .reset(reset),
-        .write_enable(MEM_WB_aluWE),
-        .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALUResult),
-        .readAddress1(id_rs),
-        .readAddress2(id_rt),
-        .writeAddress(MEM_WB_rd),
-        .lPassed(~id_rtPassed),
-        .L(id_L),
-        .value1(reg_val1),
-        .value2(reg_val2),
-        .rdVal(rdVal),
-        .r31_val(r31_val)
+        .clk(clk), .reset(reset), .write_enable(MEM_WB_we),
+        .dataInput    (MEM_WB_val),
+        .readAddress1 (id_rs), .readAddress2(id_rt),
+        .writeAddress (MEM_WB_rd),
+        .lPassed      (~id_rtPassed),
+        .L            (id_L),
+        .value1       (rf_val1), .value2(rf_val2),
+        .rdVal        (rf_rdVal), .r31_val(rf_r31)
     );
 
-    // Execute stage
+    // --- Instantiate EX stage ---
     ALU alu(
-        .pc(ID_EX_PC),
-        .rdVal(ID_EX_rdVal),
-        .operand1(ID_EX_A),
-        .operand2(ID_EX_B),
-        .opcode(ID_EX_ctrl),
-        .r_out(mem_rdata),
-        .r31_val(r31_val),
-        .result(alu_result),
-        .writeEnable(alu_we),
-        .mem_write_enable(alu_mem_we),
-        .rw_addr(alu_rwAddr),
-        .rw_val(alu_rwVal),
-        .updated_next(updated_next_pc),
-        .changing_pc(alu_chg_pc)
-    );
-    FPU fpu(
-        .operand1(ID_EX_A),
-        .operand2(ID_EX_B),
-        .opcode(ID_EX_ctrl),
-        .result(fpu_result),
-        .writeEnable()  // unused
+        .pc(ID_EX_PC), .rdVal(ID_EX_rdVal),
+        .operand1(ID_EX_A), .operand2(ID_EX_B),
+        .opcode(ID_EX_ctrl), .r_out(ID_EX_A /* dummy */), .r31_val(rf_r31),
+        .result(EX_MEM_aluResult), .writeEnable(EX_MEM_aluWE),
+        .mem_write_enable(/*unused*/), .rw_addr(/*unused*/), .rw_val(/*unused*/),
+        .updated_next(next_pc), .changing_pc(ex_chgPC)
     );
 
-    // Detect halt at decode stage
-    wire [63:0] signExt = {{52{id_L[11]}}, id_L};
-    assign hlt = (id_ctrl==5'h0f) && (signExt[3:0]==4'h0);
+    // --- WB stage (simple writeback only) ---
+    assign MEM_WB_val  = (MEM_WB_ctrl == 5'b10000) ? EX_MEM_memData : EX_MEM_aluResult;
+    assign MEM_WB_we   = EX_MEM_aluWE;
+    assign hlt         = (id_ctrl == 5'h0f) && (id_L[3:0] == 4'h0);
 
     // Pipeline register updates
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            // Initialize PC and flush pipelines
-            pc            <= 64'h2000;
-            IF_ID_IR      <= 32'd0;
-            ID_EX_ctrl    <= 5'd0;
-            EX_MEM_ctrl   <= 5'd0;
-            MEM_WB_ctrl   <= 5'd0;
+            IF_ID_PC <= 64'h2000;
+            IF_ID_IR <= 32'b0;
+            ID_EX_CTRL <= 5'b0; ID_EX_rd <= 5'b0;
+            EX_MEM_ctrl <= 5'b0; EX_MEM_rd <= 5'b0; MEM_WB_ctrl <= 5'b0;
         end else begin
-            // Writeback → RegFile occurs automatically via regfile.write_enable
-
-            // MEM → WB
-            MEM_WB_memData   <= mem_rdata;
-            MEM_WB_ALUResult <= EX_MEM_ALUResult;
-            MEM_WB_ctrl      <= EX_MEM_ctrl;
-            MEM_WB_rd        <= EX_MEM_rd;
-            MEM_WB_aluWE     <= EX_MEM_aluWE;
-            MEM_WB_memToReg  <= (EX_MEM_ctrl == 5'b10000);
-
-            // EX → MEM
-            EX_MEM_ALUResult <= (ID_EX_ctrl[4:2] == 3'b101) ? fpu_result : alu_result;
-            EX_MEM_nextPC    <= updated_next_pc;
+            // IF -> ID
+            IF_ID_PC <= next_pc;
+            IF_ID_IR <= memory_inst.instruction;
+            // ID -> EX
+            ID_EX_PC    <= IF_ID_PC;
+            ID_EX_ctrl  <= id_ctrl;
+            ID_EX_rd    <= id_rd;
+            ID_EX_A     <= rf_val1;
+            ID_EX_B     <= rf_val2;
+            ID_EX_rdVal <= rf_rdVal;
+            // EX -> MEM
             EX_MEM_ctrl      <= ID_EX_ctrl;
             EX_MEM_rd        <= ID_EX_rd;
-            EX_MEM_aluWE     <= alu_we;
-            EX_MEM_memWE     <= alu_mem_we;
-            EX_MEM_chgPC     <= alu_chg_pc;
-            EX_MEM_rwAddr    <= alu_rwAddr;
-            EX_MEM_rwVal     <= alu_rwVal;
-
-            // ID → EX
-            ID_EX_PC     <= IF_ID_PC;
-            ID_EX_A      <= reg_val1;
-            ID_EX_B      <= reg_val2;
-            ID_EX_rdVal  <= rdVal;
-            ID_EX_ctrl   <= id_ctrl;
-            ID_EX_rd     <= id_rd;
-            ID_EX_rtPassed <= id_rtPassed;
-
-            // IF → ID (flush on branch)
-            if (EX_MEM_chgPC) begin
-                IF_ID_IR  <= 32'd0;
-                IF_ID_PC  <= 64'd0;
-            end else begin
-                IF_ID_IR  <= instr;
-                IF_ID_PC  <= pc;
-            end
-
-            // PC update: branch resolution in EX/MEM
-            if (EX_MEM_chgPC)
-                pc <= EX_MEM_nextPC;
-            else
-                pc <= pc + 64'd4;
+            EX_MEM_aluWE     <= alu.writeEnable;
+            EX_MEM_memToReg  <= (ID_EX_ctrl == 5'b10000);
+            // MEM -> WB
+            MEM_WB_ctrl <= EX_MEM_ctrl;
+            MEM_WB_rd   <= EX_MEM_rd;
         end
     end
 endmodule
-
