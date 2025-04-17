@@ -239,11 +239,7 @@ endmodule
   Stages: IF -> ID -> EX -> MEM -> WB
   No hazard/forwarding logic (assumes no data/control hazards).
 */
-/*
-  Vanilla 5-stage pipeline implementation of the Tinker processor.
-  Stages: IF -> ID -> EX -> MEM -> WB
-  No hazard/forwarding logic (assumes no data/control hazards).
-*/
+
 /*
   Vanilla 5-stage pipeline implementation of the Tinker processor.
   Stages: IF -> ID -> EX -> MEM -> WB
@@ -273,7 +269,7 @@ module tinker_core(
     reg        ID_EX_rtPassed;
     reg [63:0] ID_EX_reg_val1, ID_EX_reg_val2;
     reg [63:0] ID_EX_PC;
-    reg        ID_EX_memToReg;    // select mem data vs ALU for WB
+    reg        ID_EX_memToReg;
 
     // -------------------
     // EX/MEM Pipeline Register
@@ -298,7 +294,7 @@ module tinker_core(
     // ------------
     wire [31:0] instruction_from_mem;
     wire [63:0] mem_rdata;
-    memory memory(
+    memory memory_inst(
         .pc(PC),
         .clk(clk),
         .reset(reset),
@@ -339,8 +335,8 @@ module tinker_core(
         .readAddress1(rs),
         .readAddress2(rt),
         .writeAddress(MEM_WB_rd),
-        .lPassed(ID_EX_rtPassed),
-        .L(ID_EX_L),
+        .lPassed(rtPassed),       // use raw decode signals, not latched
+        .L(L),                    // use raw literal bits
         .value1(reg_val1),
         .value2(reg_val2),
         .rdVal(rdVal),
@@ -391,7 +387,7 @@ module tinker_core(
             ID_EX_reg_val2  <= reg_val2;
             ID_EX_PC        <= IF_ID_PC;
             ID_EX_memToReg  <= (controlSignal == 5'b10000);
-            $display("ID  @%0t: rs=%%0d→%%0h, rt=%%0d→%%0h, rtPassed=%%b", $time, rs, reg_val1, rt, reg_val2, rtPassed);
+            $display("ID  @%0t: rs=%0d→%h, rt=%0d→%h, rtPassed=%b", $time, rs, reg_val1, rt, reg_val2, rtPassed);
         end
     end
 
