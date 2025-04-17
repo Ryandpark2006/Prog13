@@ -315,7 +315,7 @@ module tinker_core(
         .readAddress1(IF_ID_IR[21:17]),
         .readAddress2(IF_ID_IR[16:12]),
         .writeAddress(MEM_WB_rd),
-        .lPassed(IF_rtPassed), .L(IF_L),
+        .lPassed(~IF_rtPassed), .L(IF_L),
         .value1(regOut1), .value2(regOut2),
         .rdVal(rdVal), .r31_val(r31Val)
     );
