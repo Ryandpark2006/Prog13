@@ -230,10 +230,8 @@ module register_file(
         end
     end
 endmodule
-
-
-// Pipelined Tinker Core (Vanilla 5-Stage)
-// + Branch‐target mux, correct immediate selection, rdVal fix, and simple forwarding
+// Pipelined Tinker Core (Vanilla 5-Stage) with Branch Flush and WB-stage HALT
+// + Branch‐target mux, immediate fix, rdVal wiring, forwarding, flush on mispredict, and delay HALT until after write-back
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -251,7 +249,7 @@ module tinker_core(
     // ------------------------------------------------------------------
     wire [4:0]  IF_ctrl     = IF_ID_IR[31:27];
     wire [11:0] IF_L        = IF_ID_IR[11:0];
-    // lPassed=1 for opcodes using literal as operand2:
+    // lPassed=1 for opcodes using literal as operand2
     wire        IF_rtPassed = (IF_ctrl==5'b11001 || // addi
                                IF_ctrl==5'b11011 || // subi
                                IF_ctrl==5'b10010 || // mov rd, L
@@ -259,8 +257,6 @@ module tinker_core(
                                IF_ctrl==5'b10011 || // store
                                IF_ctrl==5'b01010)   // jump rel2
                               ? 1'b1 : 1'b0;
-    // Halt detection
-    assign hlt = (IF_ctrl==5'h0f && IF_L[3:0]==4'h0);
 
     // ------------------------------------------------------------------
     // ID/EX pipeline registers
@@ -285,7 +281,6 @@ module tinker_core(
     reg        EX_MEM_regWrite;
     reg [31:0] EX_MEM_addr;
     reg [63:0] EX_MEM_wrData;
-    // Branch signals
     reg        EX_MEM_changePC;
     reg [63:0] EX_MEM_target;
 
@@ -300,11 +295,11 @@ module tinker_core(
     reg        MEM_WB_memToReg;
 
     // ------------------------------------------------------------------
-    // Instantiate memory (IF & MEM) and register file
+    // Memory and Register File
     // ------------------------------------------------------------------
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    memory memory(
+    memory MEM_INST(
         .pc(PC), .clk(clk), .reset(reset),
         .mem_write_enable(EX_MEM_memWrite),
         .rw_val(EX_MEM_wrData), .rw_addr(EX_MEM_addr),
@@ -312,7 +307,7 @@ module tinker_core(
     );
 
     wire [63:0] regOut1, regOut2, rdVal, r31Val;
-    register_file reg_file(
+    register_file RF(
         .clk(clk), .reset(reset),
         .write_enable(MEM_WB_regWrite),
         .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
@@ -325,7 +320,7 @@ module tinker_core(
     );
 
     // ------------------------------------------------------------------
-    // Forwarding logic for EX stage
+    // Forwarding logic
     // ------------------------------------------------------------------
     wire [63:0] aluOp1 = (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
                          ? EX_MEM_ALU
@@ -342,7 +337,7 @@ module tinker_core(
                              : aluOp2_pre;
 
     // ------------------------------------------------------------------
-    // ALU instantiation (EX stage)
+    // ALU in EX stage
     // ------------------------------------------------------------------
     wire [63:0] aluResult, aluUpdatedNext;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
@@ -350,7 +345,7 @@ module tinker_core(
     wire [63:0] aluWrData;
     ALU ALU_INST(
         .pc(ID_EX_PC),
-        .rdVal(ID_EX_rdVal),         // now correct rdVal
+        .rdVal(ID_EX_rdVal),
         .operand1(aluOp1),
         .operand2(aluOp2),
         .opcode(ID_EX_ctrl),
@@ -366,29 +361,46 @@ module tinker_core(
     );
 
     // ==================================================================
-    // Stage registers
+    // IF stage: update PC and IF/ID with flush
     // ==================================================================
-    // IF stage: PC update with branch mux
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            PC       <= 64'h2000;
-            IF_ID_PC <= 0;
-            IF_ID_IR <= 0;
+            PC        <= 64'h2000;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
         end else begin
-            // Branch redirect
-            if (EX_MEM_changePC)
-                PC <= EX_MEM_target;
-            else
-                PC <= PC + 4;
-            IF_ID_PC <= PC;
-            IF_ID_IR <= inst;
+            // redirect on branch
+            if (EX_MEM_changePC) begin
+                PC        <= EX_MEM_target;
+                IF_ID_PC  <= 0;
+                IF_ID_IR  <= 32'b0;       // squash into NOP
+            end else begin
+                PC        <= PC + 4;
+                IF_ID_PC  <= PC;
+                IF_ID_IR  <= inst;
+            end
         end
     end
 
-    // ID stage: latch decode + register values
+    // ==================================================================
+    // ID stage: latch decode + registers with flush
+    // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             ID_EX_ctrl     <= 0;
+            ID_EX_rd       <= 0;
+            ID_EX_rs       <= 0;
+            ID_EX_rt       <= 0;
+            ID_EX_L        <= 0;
+            ID_EX_rtPassed <= 0;
+            ID_EX_A        <= 0;
+            ID_EX_B        <= 0;
+            ID_EX_PC       <= 0;
+            ID_EX_r31      <= 0;
+            ID_EX_rdVal    <= 0;
+        end else if (EX_MEM_changePC) begin
+            // flush decode
+            ID_EX_ctrl     <= 5'b00000;
             ID_EX_rd       <= 0;
             ID_EX_rs       <= 0;
             ID_EX_rt       <= 0;
@@ -414,7 +426,9 @@ module tinker_core(
         end
     end
 
-    // EX stage: latch ALU results and branch signals
+    // ==================================================================
+    // EX stage: latch ALU results + branch info
+    // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -436,13 +450,14 @@ module tinker_core(
             EX_MEM_regWrite <= aluRegWrite;
             EX_MEM_addr     <= aluAddr;
             EX_MEM_wrData   <= aluWrData;
-            // branch info
             EX_MEM_changePC <= aluChangePC;
             EX_MEM_target   <= aluUpdatedNext;
         end
     end
 
-    // MEM stage: pass to WB
+    // ==================================================================
+    // MEM stage: pass data to WB
+    // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
@@ -460,4 +475,9 @@ module tinker_core(
             MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
         end
     end
+
+    // ==================================================================
+    // WB stage HALT detection
+    // ==================================================================
+    assign hlt = (MEM_WB_ctrl == 5'h0f);
 endmodule
