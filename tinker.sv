@@ -300,7 +300,7 @@ module tinker_core(
     // ------------------------------------------------------------------
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    memory MEM_INST(
+    memory memory(
         .pc(PC), .clk(clk), .reset(reset),
         .mem_write_enable(EX_MEM_memWrite),
         .rw_val(EX_MEM_wrData), .rw_addr(EX_MEM_addr),
@@ -308,7 +308,7 @@ module tinker_core(
     );
 
     wire [63:0] regOut1, regOut2, rdVal, r31Val;
-    register_file RF(
+    register_file reg_file(
         .clk(clk), .reset(reset),
         .write_enable(MEM_WB_regWrite),
         .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
