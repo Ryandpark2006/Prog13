@@ -301,7 +301,7 @@ module tinker_core(
     // ------------
     wire [31:0] instruction_from_mem;
     wire [63:0] mem_rdata;
-    memory memory_inst(
+    memory memory(
         .pc(PC),
         .clk(clk),
         .reset(reset),
