@@ -231,9 +231,8 @@ module register_file(
     end
 endmodule
 
-
 // Pipelined Tinker Core (Vanilla 5-Stage)
-// + Branch flush, forwarding, and initial 2-cycle stall to settle state
+// + Branch flush, forwarding, WB-stage HALT, and unconditional 2-cycle startup stall
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -297,11 +296,11 @@ module tinker_core(
     reg        MEM_WB_memToReg;
 
     // ------------------------------------------------------------------
-    // Memory & RF
+    // Memory & Register File
     // ------------------------------------------------------------------
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    memory memory(
+    memory MEM_INST(
         .pc(PC), .clk(clk), .reset(reset),
         .mem_write_enable(EX_MEM_memWrite),
         .rw_val(EX_MEM_wrData), .rw_addr(EX_MEM_addr),
@@ -309,7 +308,7 @@ module tinker_core(
     );
 
     wire [63:0] regOut1, regOut2, rdVal, r31Val;
-    register_file reg_file(
+    register_file RF(
         .clk(clk), .reset(reset),
         .write_enable(MEM_WB_regWrite),
         .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
@@ -322,7 +321,7 @@ module tinker_core(
     );
 
     // ------------------------------------------------------------------
-    // Forwarding
+    // Forwarding logic
     // ------------------------------------------------------------------
     wire [63:0] aluOp1 = (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
                          ? EX_MEM_ALU
@@ -362,32 +361,31 @@ module tinker_core(
     );
 
     // ==================================================================
-    // IF stage: initial stall + branch flush
+    // IF stage: 2-cycle stall, then branch flush
     // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            PC         <= 64'h2000;
-            stall_cnt  <= 2;
-            IF_ID_PC   <= 0;
-            IF_ID_IR   <= 0;
-        end else if (stall_cnt > 0) begin
-            stall_cnt  <= stall_cnt - 1;
-            // inject bubble
-            IF_ID_PC   <= 0;
-            IF_ID_IR   <= 32'b0;
+            PC        <= 64'h2000;
+            stall_cnt <= 2;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
+        end else if (stall_cnt != 0) begin
+            stall_cnt <= stall_cnt - 1;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 32'b0;
         end else if (EX_MEM_changePC) begin
-            PC         <= EX_MEM_target;
-            IF_ID_PC   <= 0;
-            IF_ID_IR   <= 32'b0;
+            PC        <= EX_MEM_target;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 32'b0;
         end else begin
-            PC         <= PC + 4;
-            IF_ID_PC   <= PC;
-            IF_ID_IR   <= inst;
+            PC        <= PC + 4;
+            IF_ID_PC  <= PC;
+            IF_ID_IR  <= inst;
         end
     end
 
     // ==================================================================
-    // ID stage: flush on branch + hold during stall
+    // ID stage: flush on branch or during stall
     // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -402,8 +400,7 @@ module tinker_core(
             ID_EX_PC       <= 0;
             ID_EX_r31      <= 0;
             ID_EX_rdVal    <= 0;
-        end else if (stall_cnt > 0 || EX_MEM_changePC) begin
-            // bubble
+        end else if (stall_cnt != 0 || EX_MEM_changePC) begin
             ID_EX_ctrl     <= 5'b00000;
             ID_EX_rd       <= 0;
             ID_EX_rs       <= 0;
@@ -431,7 +428,7 @@ module tinker_core(
     end
 
     // ==================================================================
-    // EX stage: latch ALU + branch
+    // EX stage: latch ALU results and branch info
     // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -460,7 +457,7 @@ module tinker_core(
     end
 
     // ==================================================================
-    // MEM stage: pass to WB
+    // MEM stage: pass data to WB
     // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
