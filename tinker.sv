@@ -284,7 +284,7 @@ module tinker(
 
     // --- Instantiate IF stage (fetch instruction & PC update) ---
     // Memory module also lives in IF stage to fetch instruction
-    memory memory_inst(
+    memory memory(
         .pc               (IF_ID_PC),
         .clk              (clk),
         .reset            (reset),
