@@ -306,7 +306,7 @@ module tinker_core(
     reg         mem_we;
     reg  [31:0] mem_addr;
     reg  [63:0] mem_wval;
-    memory mem0(
+    memory memory(
         .pc               (PC),
         .clk              (clk),
         .reset            (reset),
@@ -329,7 +329,7 @@ module tinker_core(
         .L            (id_L),
         .rtPassed     (id_rtPassed)
     );
-    register_file rf0(
+    register_file reg_file(
         .clk           (clk),
         .reset         (reset),
         .write_enable  (MEM_WB_alu_we),
