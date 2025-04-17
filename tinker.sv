@@ -239,7 +239,7 @@ endmodule
 // instantiated ALU in EX stage and memory in MEM stage;
 // PC advances every cycle (no hazard or branch handling in this vanilla version).
 // ------------------------------------------------------------------
-module tinker_core_pipelined(
+module tinker_core(
     input  wire        clk,
     input  wire        reset,
     output wire        hlt
