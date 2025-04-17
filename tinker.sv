@@ -231,8 +231,9 @@ module register_file(
     end
 endmodule
 
-// Pipelined Tinker Core (Vanilla 5-Stage)
+// Pipelined Tinker Core (Vanilla 5-Stage) with fixed operand decoding
 // + Branch flush, forwarding, WB-stage HALT, and unconditional 2-cycle startup stall
+
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -247,17 +248,20 @@ module tinker_core(
     reg [31:0] IF_ID_IR;
 
     // ------------------------------------------------------------------
-    // Decode in IF/ID
+    // Decode in IF/ID via instruction_decoder
     // ------------------------------------------------------------------
-    wire [4:0]  IF_ctrl     = IF_ID_IR[31:27];
-    wire [11:0] IF_L        = IF_ID_IR[11:0];
-    wire        IF_rtPassed = (IF_ctrl==5'b11001 || // addi
-                               IF_ctrl==5'b11011 || // subi
-                               IF_ctrl==5'b10010 || // mov rd, L
-                               IF_ctrl==5'b10000 || // load
-                               IF_ctrl==5'b10011 || // store
-                               IF_ctrl==5'b01010)   // jrel2
-                              ? 1'b1 : 1'b0;
+    wire [4:0]  IF_ctrl, IF_rd, IF_rs, IF_rt;
+    wire [11:0] IF_L;
+    wire        IF_rtPassed;
+    instruction_decoder dec(
+        .instruction (IF_ID_IR),
+        .controlSignal(IF_ctrl),
+        .rd           (IF_rd),
+        .rs           (IF_rs),
+        .rt           (IF_rt),
+        .L            (IF_L),
+        .rtPassed     (IF_rtPassed)
+    );
 
     // ------------------------------------------------------------------
     // ID/EX registers
@@ -301,23 +305,31 @@ module tinker_core(
     wire [31:0] inst;
     wire [63:0] mem_rdata;
     memory memory(
-        .pc(PC), .clk(clk), .reset(reset),
+        .pc              (PC),
+        .clk             (clk),
+        .reset           (reset),
         .mem_write_enable(EX_MEM_memWrite),
-        .rw_val(EX_MEM_wrData), .rw_addr(EX_MEM_addr),
-        .instruction(inst), .r_out(mem_rdata)
+        .rw_val          (EX_MEM_wrData),
+        .rw_addr         (EX_MEM_addr),
+        .instruction     (inst),
+        .r_out           (mem_rdata)
     );
 
     wire [63:0] regOut1, regOut2, rdVal, r31Val;
     register_file reg_file(
-        .clk(clk), .reset(reset),
+        .clk         (clk),
+        .reset       (reset),
         .write_enable(MEM_WB_regWrite),
-        .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
-        .readAddress1(IF_ID_IR[21:17]),
-        .readAddress2(IF_ID_IR[16:12]),
+        .dataInput   (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
+        .readAddress1(IF_rs),
+        .readAddress2(IF_rt),
         .writeAddress(MEM_WB_rd),
-        .lPassed(~IF_rtPassed), .L(IF_L),
-        .value1(regOut1), .value2(regOut2),
-        .rdVal(rdVal), .r31_val(r31Val)
+        .lPassed     (~IF_rtPassed),    // invert: 1 means literal, 0 means register
+        .L           (IF_L),
+        .value1      (regOut1),
+        .value2      (regOut2),
+        .rdVal       (rdVal),
+        .r31_val     (r31Val)
     );
 
     // ------------------------------------------------------------------
@@ -344,20 +356,20 @@ module tinker_core(
     wire [31:0] aluAddr;
     wire [63:0] aluWrData;
     ALU ALU_INST(
-        .pc(ID_EX_PC),
-        .rdVal(ID_EX_rdVal),
-        .operand1(aluOp1),
-        .operand2(aluOp2),
-        .opcode(ID_EX_ctrl),
-        .r_out(mem_rdata),
-        .r31_val(ID_EX_r31),
-        .result(aluResult),
-        .writeEnable(aluRegWrite),
+        .pc            (ID_EX_PC),
+        .rdVal         (ID_EX_rdVal),
+        .operand1      (aluOp1),
+        .operand2      (aluOp2),
+        .opcode        (ID_EX_ctrl),
+        .r_out         (mem_rdata),
+        .r31_val       (ID_EX_r31),
+        .result        (aluResult),
+        .writeEnable   (aluRegWrite),
         .mem_write_enable(aluMemWrite),
-        .rw_addr(aluAddr),
-        .rw_val(aluWrData),
-        .updated_next(aluUpdatedNext),
-        .changing_pc(aluChangePC)
+        .rw_addr       (aluAddr),
+        .rw_val        (aluWrData),
+        .updated_next  (aluUpdatedNext),
+        .changing_pc   (aluChangePC)
     );
 
     // ==================================================================
@@ -401,6 +413,7 @@ module tinker_core(
             ID_EX_r31      <= 0;
             ID_EX_rdVal    <= 0;
         end else if (stall_cnt != 0 || EX_MEM_changePC) begin
+            // insert bubble
             ID_EX_ctrl     <= 5'b00000;
             ID_EX_rd       <= 0;
             ID_EX_rs       <= 0;
@@ -414,9 +427,9 @@ module tinker_core(
             ID_EX_rdVal    <= 0;
         end else begin
             ID_EX_ctrl     <= IF_ctrl;
-            ID_EX_rd       <= IF_ID_IR[26:22];
-            ID_EX_rs       <= IF_ID_IR[21:17];
-            ID_EX_rt       <= IF_ID_IR[16:12];
+            ID_EX_rd       <= IF_rd;
+            ID_EX_rs       <= IF_rs;
+            ID_EX_rt       <= IF_rt;
             ID_EX_L        <= IF_L;
             ID_EX_rtPassed <= IF_rtPassed;
             ID_EX_A        <= regOut1;
