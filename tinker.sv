@@ -351,7 +351,7 @@ module tinker_core(
     // regfile (writes in WB only)
     assign rf_we    = (state == WRITEBACK) && writeEnable_final;
     assign rf_wdata = result_reg;
-    register_file rf0 (
+    register_file reg_file (
         .clk(clk),
         .reset(reset),
         .write_enable(rf_we),
