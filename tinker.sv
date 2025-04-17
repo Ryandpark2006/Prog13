@@ -244,6 +244,11 @@ endmodule
   Stages: IF -> ID -> EX -> MEM -> WB
   No hazard/forwarding logic (assumes no data/control hazards).
 */
+/*
+  Vanilla 5-stage pipeline implementation of the Tinker processor.
+  Stages: IF -> ID -> EX -> MEM -> WB
+  No hazard/forwarding logic (assumes no data/control hazards).
+*/
 
 module tinker_core(
     input  wire        clk,
@@ -268,7 +273,7 @@ module tinker_core(
     reg        ID_EX_rtPassed;
     reg [63:0] ID_EX_reg_val1, ID_EX_reg_val2;
     reg [63:0] ID_EX_PC;
-    reg        ID_EX_memToReg;    // new: select mem data vs ALU for WB
+    reg        ID_EX_memToReg;    // select mem data vs ALU for WB
 
     // -------------------
     // EX/MEM Pipeline Register
@@ -278,7 +283,7 @@ module tinker_core(
     reg        EX_MEM_mem_write_enable, EX_MEM_writeEnable, EX_MEM_changing_pc;
     reg [31:0] EX_MEM_rw_addr;
     reg [63:0] EX_MEM_rw_val, EX_MEM_updated_next;
-    reg        EX_MEM_memToReg;   // new
+    reg        EX_MEM_memToReg;
 
     // -------------------
     // MEM/WB Pipeline Register
@@ -286,7 +291,7 @@ module tinker_core(
     reg [4:0]  MEM_WB_rd;
     reg [63:0] MEM_WB_alu_result, MEM_WB_mem_data;
     reg        MEM_WB_writeEnable;
-    reg        MEM_WB_memToReg;   // new
+    reg        MEM_WB_memToReg;
 
     // ------------
     // Instruction Memory / Data Memory
@@ -386,6 +391,7 @@ module tinker_core(
             ID_EX_reg_val2  <= reg_val2;
             ID_EX_PC        <= IF_ID_PC;
             ID_EX_memToReg  <= (controlSignal == 5'b10000);
+            $display("ID  @%0t: rs=%%0d→%%0h, rt=%%0d→%%0h, rtPassed=%%b", $time, rs, reg_val1, rt, reg_val2, rtPassed);
         end
     end
 
@@ -393,7 +399,6 @@ module tinker_core(
     //  EX Stage: ALU operations & branch decision
     // ------------------------------------------------------------------------------------------------
     wire [63:0] signExtL       = {{52{ID_EX_L[11]}}, ID_EX_L};
-    // FIX: select literal when rtPassed, else register value
     wire [63:0] alu_operand2   = ID_EX_rtPassed ? signExtL : ID_EX_reg_val2;
 
     wire [63:0] alu_result;
@@ -421,6 +426,12 @@ module tinker_core(
         .changing_pc(alu_changing_pc)
     );
 
+    // EX debug print
+    always @(*) begin
+        $display("EX  @%0t: op1=%0h, op2=%0h → result=%0h (we=%b)",
+                 $time, ID_EX_reg_val1, alu_operand2, alu_result, alu_writeEnable);
+    end
+
     // ------------------------------------------------------------------------------------------------
     // EX/MEM Pipeline Register
     // ------------------------------------------------------------------------------------------------
@@ -447,6 +458,7 @@ module tinker_core(
             EX_MEM_rw_val           <= alu_rw_val;
             EX_MEM_updated_next     <= alu_updated_next;
             EX_MEM_memToReg         <= ID_EX_memToReg;
+            $display("X/M @%0t: alu_result=%0h, we=%b", $time, alu_result, alu_writeEnable);
         end
     end
 
@@ -466,6 +478,8 @@ module tinker_core(
             MEM_WB_mem_data   <= mem_rdata;
             MEM_WB_writeEnable<= EX_MEM_writeEnable;
             MEM_WB_memToReg   <= EX_MEM_memToReg;
+            $display("M/W @%0t: alu_result=%0h, mem_data=%0h, we=%b", $time,
+                     EX_MEM_alu_result, mem_rdata, EX_MEM_writeEnable);
         end
     end
 
