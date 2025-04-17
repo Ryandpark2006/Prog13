@@ -246,6 +246,12 @@ endmodule
   No hazard/forwarding logic (assumes no data/control hazards).
 */
 
+/*
+  Vanilla 5-stage pipeline implementation of the Tinker processor.
+  Stages: IF -> ID -> EX -> MEM -> WB
+  No hazard/forwarding logic (assumes no data/control hazards).
+*/
+
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -335,8 +341,8 @@ module tinker_core(
         .readAddress1(rs),
         .readAddress2(rt),
         .writeAddress(MEM_WB_rd),
-        .lPassed(rtPassed),       // use raw decode signals, not latched
-        .L(L),                    // use raw literal bits
+        .lPassed(rtPassed),
+        .L(L),
         .value1(reg_val1),
         .value2(reg_val2),
         .rdVal(rdVal),
@@ -386,8 +392,11 @@ module tinker_core(
             ID_EX_reg_val1  <= reg_val1;
             ID_EX_reg_val2  <= reg_val2;
             ID_EX_PC        <= IF_ID_PC;
-            ID_EX_memToReg  <= (controlSignal == 5'b10000);
-            $display("ID  @%0t: rs=%0d→%h, rt=%0d→%h, rtPassed=%b", $time, rs, reg_val1, rt, reg_val2, rtPassed);
+            // Extract memToReg from appropriate bit of controlSignal
+            // Adjust bit index according to decoder encoding (e.g., bit[3] if memToReg is controlSignal[3])
+            ID_EX_memToReg  <= controlSignal[3];
+            $display("ID  @%0t: ctrl=%b, rs=%0d→%h, rt=%0d→%h, memToReg=%b, rtPassed=%b", $time,
+                     controlSignal, rs, reg_val1, rt, reg_val2, ID_EX_memToReg, rtPassed);
         end
     end
 
@@ -454,7 +463,8 @@ module tinker_core(
             EX_MEM_rw_val           <= alu_rw_val;
             EX_MEM_updated_next     <= alu_updated_next;
             EX_MEM_memToReg         <= ID_EX_memToReg;
-            $display("X/M @%0t: alu_result=%0h, we=%b", $time, alu_result, alu_writeEnable);
+            $display("X/M @%0t: rd=%0d, alu=%0h, we=%b, memToReg=%b", $time,
+                     ID_EX_rd, alu_result, alu_writeEnable, ID_EX_memToReg);
         end
     end
 
@@ -474,8 +484,18 @@ module tinker_core(
             MEM_WB_mem_data   <= mem_rdata;
             MEM_WB_writeEnable<= EX_MEM_writeEnable;
             MEM_WB_memToReg   <= EX_MEM_memToReg;
-            $display("M/W @%0t: alu_result=%0h, mem_data=%0h, we=%b", $time,
-                     EX_MEM_alu_result, mem_rdata, EX_MEM_writeEnable);
+            $display("M/W @%0t: rd=%0d, we=%b, alu=%0h, mem=%0h, memToReg=%b", $time,
+                     EX_MEM_rd, EX_MEM_writeEnable, EX_MEM_alu_result, mem_rdata, EX_MEM_memToReg);
+        end
+    end
+
+    // ------------------------------------------------------------------------------------------------
+    //  WB Stage: Debug register writeback
+    // ------------------------------------------------------------------------------------------------
+    always @(posedge clk) begin
+        if (!reset) begin
+            $display("WB  @%0t: rd=%0d, we=%b, writeData=%h", $time,
+                     MEM_WB_rd, MEM_WB_writeEnable, wb_data);
         end
     end
 
