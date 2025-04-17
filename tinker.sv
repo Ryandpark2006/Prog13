@@ -274,7 +274,7 @@ module tinker_core(
     wire [63:0] reg_val1, reg_val2, rdVal, r31_val;
     wire [4:0] operator1 = (controlSignal==5'b10011)? rs : (rtPassed? rs: rd);
     wire [4:0] operator2 = rt;
-    register_file register_file(
+    register_file reg_file(
         .clk(clk), .reset(reset), .write_enable((state==WRITEBACK)? final_write_enable:1'b0),
         .dataInput(result_reg), .readAddress1(operator1), .readAddress2(operator2),
         .writeAddress(rd), .lPassed(~rtPassed), .L(L), .value1(reg_val1), .value2(reg_val2),
