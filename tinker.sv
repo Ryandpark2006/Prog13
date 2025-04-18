@@ -126,20 +126,20 @@ module register_file (
     output [63:0] rd3,
     output [63:0] sp_val
 );
-    reg [63:0] regs [0:31];
+    reg [63:0] registers [0:31];
 
-    assign rd1    = regs[ra1];
-    assign rd2    = regs[ra2];
-    assign rd3    = regs[ra3];
-    assign sp_val = regs[31];
+    assign rd1    = registers[ra1];
+    assign rd2    = registers[ra2];
+    assign rd3    = registers[ra3];
+    assign sp_val = registers[31];
 
     integer i;
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            for (i = 0; i < 31; i = i + 1) regs[i] <= 64'd0;
-            regs[31] <= 64'd524288;
+            for (i = 0; i < 31; i = i + 1) registers[i] <= 64'd0;
+            registers[31] <= 64'd524288;
         end else if (we) begin
-            regs[wa] <= data_in;
+            registers[wa] <= data_in;
         end
     end
 endmodule
@@ -153,21 +153,21 @@ module memory (
     output [31:0] instr_out,
     output [63:0] data_out
 );
-    reg [7:0] mem_bytes [0:524287];
+    reg [7:0] bytes [0:524287];
 
-    assign instr_out = {mem_bytes[pc_in+3], mem_bytes[pc_in+2],
-                        mem_bytes[pc_in+1], mem_bytes[pc_in]};
+    assign instr_out = {bytes[pc_in+3], bytes[pc_in+2],
+                        bytes[pc_in+1], bytes[pc_in]};
 
-    assign data_out  = {mem_bytes[addr_in+7], mem_bytes[addr_in+6],
-                        mem_bytes[addr_in+5], mem_bytes[addr_in+4],
-                        mem_bytes[addr_in+3], mem_bytes[addr_in+2],
-                        mem_bytes[addr_in+1], mem_bytes[addr_in]};
+    assign data_out  = {bytes[addr_in+7], bytes[addr_in+6],
+                        bytes[addr_in+5], bytes[addr_in+4],
+                        bytes[addr_in+3], bytes[addr_in+2],
+                        bytes[addr_in+1], bytes[addr_in]};
 
     always @(posedge clk) begin
         if (we) begin
-            {mem_bytes[addr_in+7], mem_bytes[addr_in+6], mem_bytes[addr_in+5],
-             mem_bytes[addr_in+4], mem_bytes[addr_in+3], mem_bytes[addr_in+2],
-             mem_bytes[addr_in+1], mem_bytes[addr_in]} <= data_in;
+            {bytes[addr_in+7], bytes[addr_in+6], bytes[addr_in+5],
+             bytes[addr_in+4], bytes[addr_in+3], bytes[addr_in+2],
+             bytes[addr_in+1], bytes[addr_in]} <= data_in;
         end
     end
 endmodule
