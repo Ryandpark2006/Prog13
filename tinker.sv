@@ -188,171 +188,220 @@ module decoder(
     assign l      = instruction[11:0];
 endmodule
 
-/* tinker‑core — refactored with pc / if_id / id_ex / ex_mem style */
 module tinker_core (
     input  wire clk,
     input  wire reset,
     output wire hlt
 );
 
-/* 0. fetch */
-reg  [63:0] pc;
-wire [63:0] pc_plus4 = pc + 64'd4;
+/* ================================================================
+   0. Program Counter & FETCH ------------------------------------*/
+reg  [63:0] programCounter;
+wire [63:0] pcPlus4 = programCounter + 64'd4;
 
-/* hazard flags */
-wire stall_if;
-wire flush_if;
+/* --------------------------------------------------  Flush / Stall */
+wire fetchStall;            // RAW‑hazard detector output
+/*  ►► FIX ◄◄  flush as soon as ALU resolves a branch */
+wire flushFetch = aluBranchTaken;   // use ALU’s combinational flag
 
-/* 1. if→id */
-reg [31:0] if_id_ir;
-reg [63:0] if_id_pc4;
+/* ================================================================
+   1. IF / ID  ----------------------------------------------------*/
+reg  [31:0] fetchToDecodeInstr;
+reg  [63:0] fetchToDecodePCPlus4;
 
-/* 2. id→ex */
-reg [4:0]  id_ex_op , id_ex_rd , id_ex_rs , id_ex_rt;
-reg [63:0] id_ex_a  , id_ex_b  , id_ex_c;
-reg [63:0] id_ex_sext, id_ex_pc4, id_ex_sp;
+/* ================================================================
+   2. ID / EX  ----------------------------------------------------*/
+reg  [4:0]  decoderToAluOpcode, decoderToAluRd, decoderToAluRs, decoderToAluRt;
+reg  [63:0] decoderToAluData1,  decoderToAluData2,  decoderToAluData3;
+reg  [63:0] decoderToAluSignExtLit, decoderToAluPCPlus4, decoderToAluStackPtr;
 
-/* 3. ex→mem */
-reg [4:0]  ex_mem_rd;
-reg [63:0] ex_mem_alu , ex_mem_addr , ex_mem_pctarget;
-reg        ex_mem_br  , ex_mem_regw , ex_mem_memw , ex_mem_hlt;
+/* ================================================================
+   3. EX / MEM  ---------------------------------------------------*/
+reg  [4:0]  aluToMemRd;
+reg  [63:0] aluToMemResult, aluToMemAddr, aluToMemNewPC;
+reg         aluToMemBranchTaken, aluToMemWriteToReg, aluToMemWriteToMem, aluToMemHlt;
 
-/* 4. mem→wb */
-reg [4:0]  mem_wb_rd;
-reg [63:0] mem_wb_val;
-reg        mem_wb_regw , mem_wb_hlt;
+/* ================================================================
+   4. MEM / WB  ---------------------------------------------------*/
+reg  [4:0]  memToWritebackRd;
+reg  [63:0] memToWritebackResult;
+reg         memToWritebackWriteReg, memToWritebackHlt;
 
-/* memory */
-wire [31:0] imem_out;
-wire [63:0] dmem_out;
+assign hlt = memToWritebackHlt;
+
+/* ================================================================
+   5. Instruction / Data Memory ----------------------------------*/
+wire [31:0] fetchedInstr;
+wire [63:0] memoryReadData;
 
 memory memory (
-    .clk(clk),
-    .programCounter(pc),
-    .dataAddress(ex_mem_addr),
-    .writeEnable(ex_mem_memw),
-    .writeData(ex_mem_alu),
-    .readInstruction(imem_out),
-    .readData(dmem_out)
+    .clk            (clk),
+    .programCounter (programCounter),
+    .dataAddress    (aluAddr),
+    .writeEnable    (aluWriteMem),
+    .writeData      (aluResult),
+    .readInstruction(fetchedInstr),
+    .readData       (memoryReadData)
 );
 
-/* decode */
-wire [4:0] op, rd, rs, rt;
-wire [11:0] lit;
-decoder dec (
-    .instruction(if_id_ir),
-    .opcode(op), .rd(rd), .rs(rs), .rt(rt), .l(lit)
-);
+/* ================================================================
+   6. Decode stage wiring ----------------------------------------*/
+wire [4:0] opcode, rd, rs, rt;  wire [11:0] l;
 
-/* register file */
-wire [63:0] reg_a, reg_b, reg_c, reg_sp;
-register_file reg_file (
+decoder dec_inst (.instruction(fetchToDecodeInstr),
+                  .opcode(opcode), .rd(rd), .rs(rs), .rt(rt), .l(l));
+
+wire [63:0] signExtLiteral = {{52{l[11]}}, l};
+
+/* ---------- Register file -------------------------------------*/
+wire [63:0] regData1, regData2, regData3, stackPtr;
+
+registers reg_file (
     .clk(clk), .reset(reset),
-    .write(mem_wb_regw),
-    .data_input(mem_wb_val),
+    .write(memToWritebackWriteReg),
+    .data_input(memToWritebackResult),
     .registerOne(rs), .registerTwo(rt), .registerThree(rd),
-    .writeAddress(mem_wb_rd),
-    .data_outputOne(reg_a), .data_outputTwo(reg_b),
-    .data_outputThree(reg_c), .stackPointer(reg_sp)
-);
+    .writeAddress(memToWritebackRd),
+    .data_outputOne(regData1), .data_outputTwo(regData2),
+    .data_outputThree(regData3), .stackPointer(stackPtr));
 
-/* sign‑extend */
-wire [63:0] sext = {{52{lit[11]}}, lit};
+/* ================================================================
+   7. RAW‑hazard detector (Decode) -------------------------------*/
+/* Does the ID/EX instruction write a register? */
+wire idExWriteReg = (decoderToAluOpcode != 5'h1F) &&           // not a bubble
+                    (decoderToAluOpcode != 5'h08) &&           // br
+                    (decoderToAluOpcode != 5'h09) &&           // brr rd
+                    (decoderToAluOpcode != 5'h0a) &&           // brr L
+                    (decoderToAluOpcode != 5'h0b) &&           // brnz
+                    (decoderToAluOpcode != 5'h0c) &&           // call
+                    (decoderToAluOpcode != 5'h0d) &&           // return
+                    (decoderToAluOpcode != 5'h0e) &&           // brgt
+                    (decoderToAluOpcode != 5'h0f) &&           // halt/priv
+                    (decoderToAluOpcode != 5'h13);             // store
 
-/* hazard detect */
-// wire idex_regw = (id_ex_op != 5'h1f) && (id_ex_op < 5'h08 || id_ex_op > 5'h0f) && (id_ex_op != 5'h13);
-wire idex_regw = (id_ex_op != 5'h1F) &&           // not a bubble
-                    (id_ex_op != 5'h08) &&           // br
-                    (id_ex_op != 5'h09) &&           // brr rd
-                    (id_ex_op != 5'h0a) &&           // brr L
-                    (id_ex_op != 5'h0b) &&           // brnz
-                    (id_ex_op != 5'h0c) &&           // call
-                    (id_ex_op != 5'h0d) &&           // return
-                    (id_ex_op != 5'h0e) &&           // brgt
-                    (id_ex_op != 5'h0f) &&           // halt/priv
-                    (id_ex_op != 5'h13);             // store
-wire raw_idex = idex_regw   && ((id_ex_rd==rs)||(id_ex_rd==rt)||(id_ex_rd==rd));
-wire raw_ex   = ex_mem_regw && ((ex_mem_rd==rs)||(ex_mem_rd==rt)||(ex_mem_rd==rd));
-wire raw_mem  = mem_wb_regw && ((mem_wb_rd==rs)||(mem_wb_rd==rt)||(mem_wb_rd==rd));
-assign stall_if = raw_idex | raw_ex | raw_mem;
+wire hazardIDEX = idExWriteReg &&
+                  ((decoderToAluRd == rs) || (decoderToAluRd == rt) || (decoderToAluRd == rd));
 
-/* bubble mux */
-localparam [4:0] NOP = 5'h1f;
-wire bubble = stall_if | flush_if;
-wire [31:0] if_id_ir_n  = bubble ? 32'd0 : imem_out;
-wire [63:0] if_id_pc4_n = bubble ? 64'd0 : pc_plus4;
+wire hazardEX  = aluToMemWriteToReg &&
+                 ((aluToMemRd == rs) || (aluToMemRd == rt) || (aluToMemRd == rd));
 
-/* alu */
-wire [63:0] alu_y, alu_addr, alu_pc_out;
-wire        alu_taken, alu_regw, alu_memw, alu_hlt;
+wire hazardMEM = memToWritebackWriteReg &&
+                 ((memToWritebackRd == rs) || (memToWritebackRd == rt) || (memToWritebackRd == rd));
+
+assign fetchStall = hazardIDEX | hazardEX | hazardMEM;
+
+/* ================================================================
+   8. IF/ID & ID/EX next‑state calc ------------------------------*/
+wire [31:0] nextFetchInstr   = flushFetch ? 32'd0 :
+                               fetchStall ? fetchToDecodeInstr : fetchedInstr;
+wire [63:0] nextFetchPCPlus4 = flushFetch ? 64'd0 :
+                               fetchStall ? fetchToDecodePCPlus4 : pcPlus4;
+
+localparam [4:0] BUBBLE_OP = 5'h1F;  wire bubble = flushFetch|fetchStall;
+
+wire [4:0]  nextOpcode     = bubble ? BUBBLE_OP : opcode;
+wire [4:0]  nextRd         = bubble ? 5'd0      : rd;
+wire [4:0]  nextRs         = bubble ? 5'd0      : rs;
+wire [4:0]  nextRt         = bubble ? 5'd0      : rt;
+
+wire [63:0] nextData1      = bubble ? 64'd0 : regData1;
+wire [63:0] nextData2      = bubble ? 64'd0 : regData2;
+wire [63:0] nextData3      = bubble ? 64'd0 : regData3;
+wire [63:0] nextSignExtLit = bubble ? 64'd0 : signExtLiteral;
+wire [63:0] nextPCPlus4ID  = bubble ? 64'd0 : fetchToDecodePCPlus4;
+wire [63:0] nextStackPtr   = bubble ? 64'd0 : stackPtr;
+
+/* ================================================================
+   9. Execute stage (ALU) ----------------------------------------*/
+wire [63:0] aluResult, aluAddr, aluNewPC;
+wire        aluBranchTaken, aluWriteReg, aluWriteMem, aluHalt;
+
 alu alu_inst (
-    .opcode(id_ex_op),
-    .inputDataOne(id_ex_a), .inputDataTwo(id_ex_b), .inputDataThree(id_ex_c),
-    .signExtendedLiteral(id_ex_sext),
-    .programCounter(id_ex_pc4 - 64'd4),
-    .stackPointer(id_ex_sp),
-    .readMemory(dmem_out),
-    .result(alu_y), .readWriteAddress(alu_addr),
-    .newProgramCounter(alu_pc_out),
-    .branchTaken(alu_taken),
-    .writeToRegister(alu_regw),
-    .writeToMemory(alu_memw),
-    .hlt(alu_hlt)
-);
+    .opcode(decoderToAluOpcode),
+    .inputDataOne(decoderToAluData1), .inputDataTwo(decoderToAluData2),
+    .inputDataThree(decoderToAluData3),
+    .signExtendedLiteral(decoderToAluSignExtLit),
+    .programCounter(decoderToAluPCPlus4 - 64'd4),
+    .stackPointer(decoderToAluStackPtr),
+    .readMemory(memoryReadData),
+    .result(aluResult), .readWriteAddress(aluAddr),
+    .newProgramCounter(aluNewPC),
+    .branchTaken(aluBranchTaken),
+    .writeToRegister(aluWriteReg),
+    .writeToMemory(aluWriteMem),
+    .hlt(aluHalt));
 
-assign flush_if = alu_taken;
+/* EX/MEM next values -------------------------------------------*/
+wire [4:0]  nextAluToMemRd          = decoderToAluRd;
+wire [63:0] nextAluToMemResult      = aluResult;
+wire [63:0] nextAluToMemAddr        = aluAddr;
+wire [63:0] nextAluToMemNewPC       = aluNewPC;
+wire        nextAluToMemBranchTaken = aluBranchTaken;
+wire        nextAluToMemWriteReg    = aluWriteReg;
+wire        nextAluToMemWriteMem    = aluWriteMem;
+wire        nextAluToMemHlt         = aluHalt;
 
-/* sequential logic */
+/* ================================================================
+   10. MEM stage forwarding --------------------------------------*/
+wire [4:0]  nextMemToWB_Rd        = aluToMemRd;
+wire [63:0] nextMemToWB_Result    = aluToMemResult;
+wire        nextMemToWB_WriteReg  = aluToMemWriteToReg;
+wire        nextMemToWB_Hlt       = aluToMemHlt;
+
+/* ================================================================
+   11. Sequential logic ------------------------------------------*/
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        pc <= 64'h2000;
-        if_id_ir <= 0; if_id_pc4 <= 0;
-        id_ex_op <= NOP; id_ex_rd<=0; id_ex_rs<=0; id_ex_rt<=0;
-        id_ex_a<=0; id_ex_b<=0; id_ex_c<=0; id_ex_sext<=0; id_ex_pc4<=0; id_ex_sp<=0;
-        ex_mem_rd<=0; ex_mem_alu<=0; ex_mem_addr<=0; ex_mem_pctarget<=0;
-        ex_mem_br<=0; ex_mem_regw<=0; ex_mem_memw<=0; ex_mem_hlt<=0;
-        mem_wb_rd<=0; mem_wb_val<=0; mem_wb_regw<=0; mem_wb_hlt<=0;
+        programCounter <= 64'h2000;
+        fetchToDecodeInstr <= 32'd0; fetchToDecodePCPlus4 <= 64'd0;
+
+        decoderToAluOpcode <= BUBBLE_OP; decoderToAluRd <= 0;
+        decoderToAluRs <= 0; decoderToAluRt <= 0;
+        decoderToAluData1 <= 0; decoderToAluData2 <= 0; decoderToAluData3 <= 0;
+        decoderToAluSignExtLit <= 0; decoderToAluPCPlus4 <= 0; decoderToAluStackPtr <= 0;
+
+        aluToMemRd <= 0; aluToMemResult <= 0; aluToMemAddr <= 0; aluToMemNewPC <= 0;
+        aluToMemBranchTaken <= 0; aluToMemWriteToReg <= 0; aluToMemWriteToMem <= 0; aluToMemHlt <= 0;
+
+        memToWritebackRd <= 0; memToWritebackResult <= 0;
+        memToWritebackWriteReg <= 0; memToWritebackHlt <= 0;
     end else begin
-        /* pc */
-        if (alu_taken)      pc <= alu_pc_out;
-        else if (!stall_if) pc <= pc_plus4;
+        /* PC update */
+        if (flushFetch)          programCounter <= aluNewPC;
+        else if (!fetchStall)    programCounter <= pcPlus4;
 
-        /* if→id */
-        if_id_ir  <= if_id_ir_n;
-        if_id_pc4 <= if_id_pc4_n;
+        /* IF/ID */
+        fetchToDecodeInstr   <= nextFetchInstr;
+        fetchToDecodePCPlus4 <= nextFetchPCPlus4;
 
-        /* id→ex */
-        id_ex_op   <= bubble ? NOP : op;
-        id_ex_rd   <= bubble ? 5'd0 : rd;
-        id_ex_rs   <= bubble ? 5'd0 : rs;
-        id_ex_rt   <= bubble ? 5'd0 : rt;
-        id_ex_a    <= bubble ? 0 : reg_a;
-        id_ex_b    <= bubble ? 0 : reg_b;
-        id_ex_c    <= bubble ? 0 : reg_c;
-        id_ex_sext <= bubble ? 0 : sext;
-        id_ex_pc4  <= bubble ? 0 : if_id_pc4;
-        id_ex_sp   <= bubble ? 0 : reg_sp;
+        /* ID/EX */
+        decoderToAluOpcode     <= nextOpcode;
+        decoderToAluRd         <= nextRd;
+        decoderToAluRs         <= nextRs;
+        decoderToAluRt         <= nextRt;
+        decoderToAluData1      <= nextData1;
+        decoderToAluData2      <= nextData2;
+        decoderToAluData3      <= nextData3;
+        decoderToAluSignExtLit <= nextSignExtLit;
+        decoderToAluPCPlus4    <= nextPCPlus4ID;
+        decoderToAluStackPtr   <= nextStackPtr;
 
-        /* ex→mem */
-        ex_mem_rd       <= id_ex_rd;
-        ex_mem_alu      <= alu_y;
-        ex_mem_addr     <= alu_addr;
-        ex_mem_pctarget <= alu_pc_out;
-        ex_mem_br       <= alu_taken;
-        ex_mem_regw     <= alu_regw;
-        ex_mem_memw     <= alu_memw;
-        ex_mem_hlt      <= alu_hlt;
+        /* EX/MEM */
+        aluToMemRd              <= nextAluToMemRd;
+        aluToMemResult          <= nextAluToMemResult;
+        aluToMemAddr            <= nextAluToMemAddr;
+        aluToMemNewPC           <= nextAluToMemNewPC;
+        aluToMemBranchTaken     <= nextAluToMemBranchTaken;
+        aluToMemWriteToReg      <= nextAluToMemWriteReg;
+        aluToMemWriteToMem      <= nextAluToMemWriteMem;
+        aluToMemHlt             <= nextAluToMemHlt;
 
-        /* mem→wb */
-        mem_wb_rd   <= ex_mem_rd;
-        mem_wb_val  <= ex_mem_alu;
-        mem_wb_regw <= ex_mem_regw;
-        mem_wb_hlt  <= ex_mem_hlt;
+        /* MEM/WB */
+        memToWritebackRd        <= nextMemToWB_Rd;
+        memToWritebackResult    <= nextMemToWB_Result;
+        memToWritebackWriteReg  <= nextMemToWB_WriteReg;
+        memToWritebackHlt       <= nextMemToWB_Hlt;
     end
 end
 
-/* halt */
-assign hlt = mem_wb_hlt;
-
 endmodule
-
