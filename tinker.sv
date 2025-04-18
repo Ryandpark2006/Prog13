@@ -256,7 +256,7 @@ wire [63:0] signExtLiteral = {{52{l[11]}}, l};
 /* ---------- Register file -------------------------------------*/
 wire [63:0] regData1, regData2, regData3, stackPtr;
 
-registers reg_file (
+register_file reg_file (
     .clk(clk), .reset(reset),
     .write(memToWritebackWriteReg),
     .data_input(memToWritebackResult),
