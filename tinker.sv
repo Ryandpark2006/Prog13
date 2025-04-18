@@ -187,8 +187,9 @@ module decoder (
     assign lit  = instr[11:0];
 endmodule
 
+
 // ================================================================
-// tinker_core  – with EX/MEM + MEM/WB operand forwarding
+// tinker_core — corrected forwarding & 1‑cycle load‑use stall
 // ================================================================
 module tinker_core (
     input  wire clk,
@@ -200,24 +201,24 @@ module tinker_core (
 reg  [63:0] pc_reg;
 wire [63:0] pc_plus4 = pc_reg + 64'd4;
 
-/* flush on taken branch (no generic stalls any more) */
+/* pipe‑flush on taken branch */
 wire flush_if;
 
-/* 1. if / id ---------------------------------------------------*/
+/* 1. IF / ID ---------------------------------------------------*/
 reg [31:0] if_id_ir;
 reg [63:0] if_id_pc4;
 
-/* 2. id / ex ---------------------------------------------------*/
+/* 2. ID / EX ---------------------------------------------------*/
 reg [4:0]  id_ex_op, id_ex_rd, id_ex_rs, id_ex_rt;
 reg [63:0] id_ex_a,  id_ex_b,  id_ex_c;
 reg [63:0] id_ex_imm, id_ex_pc4, id_ex_sp;
 
-/* 3. ex / mem --------------------------------------------------*/
-reg [4:0]  ex_mem_rd;
+/* 3. EX / MEM --------------------------------------------------*/
+reg [4:0]  ex_mem_op, ex_mem_rd;
 reg [63:0] ex_mem_res, ex_mem_addr, ex_mem_npc;
 reg        ex_mem_br, ex_mem_we_reg, ex_mem_we_mem, ex_mem_hlt;
 
-/* 4. mem / wb --------------------------------------------------*/
+/* 4. MEM / WB --------------------------------------------------*/
 reg [4:0]  mem_wb_rd;
 reg [63:0] mem_wb_res;
 reg        mem_wb_we_reg, mem_wb_hlt;
@@ -228,7 +229,7 @@ assign hlt = mem_wb_hlt;
 wire [31:0] instr_fetch;
 wire [63:0] mem_rdata;
 
-memory memory (
+memory mem (
     .clk     (clk),
     .pc_in   (pc_reg),
     .addr_in (alu_addr),
@@ -252,7 +253,7 @@ wire [63:0] imm_ext = {{52{dec_lit[11]}}, dec_lit};
 /* register file -----------------------------------------------*/
 wire [63:0] rf_a, rf_b, rf_c, sp_val;
 
-register_file reg_file (
+register_file rf (
     .clk(clk), .reset(reset),
     .we     (mem_wb_we_reg),
     .data_in(mem_wb_res),
@@ -261,41 +262,72 @@ register_file reg_file (
     .rd1(rf_a), .rd2(rf_b), .rd3(rf_c), .sp_val(sp_val)
 );
 
-/* ---------- forwarding multiplexers -------------------------- */
-wire match_ex_rs  = (ex_mem_we_reg && ex_mem_rd!=5'd0 && ex_mem_rd==dec_rs);
-wire match_wb_rs  = (mem_wb_we_reg && mem_wb_rd!=5'd0 && mem_wb_rd==dec_rs);
+/* ---------- forwarding (to EX stage) --------------------------*/
+/* does the instruction currently in EX write a destination? */
+wire id_ex_we_reg = (id_ex_op != 5'h1f) && (id_ex_op != 5'h08) &&
+                    (id_ex_op != 5'h09) && (id_ex_op != 5'h0a) &&
+                    (id_ex_op != 5'h0b) && (id_ex_op != 5'h0c) &&
+                    (id_ex_op != 5'h0d) && (id_ex_op != 5'h0e) &&
+                    (id_ex_op != 5'h0f) && (id_ex_op != 5'h13);
 
-wire match_ex_rt  = (ex_mem_we_reg && ex_mem_rd!=5'd0 && ex_mem_rd==dec_rt);
-wire match_wb_rt  = (mem_wb_we_reg && mem_wb_rd!=5'd0 && mem_wb_rd==dec_rt);
+/* does the instruction in MEM load from memory? */
+wire ex_mem_is_load = (ex_mem_op == 5'h10);
 
-wire match_ex_rd  = (ex_mem_we_reg && ex_mem_rd!=5'd0 && ex_mem_rd==dec_rd);
-wire match_wb_rd  = (mem_wb_we_reg && mem_wb_rd!=5'd0 && mem_wb_rd==dec_rd);
+/* one‑cycle stall if load‑use hazard */
+wire load_use_hazard = ex_mem_is_load &&
+                      ((ex_mem_rd == dec_rs) ||
+                       (ex_mem_rd == dec_rt) ||
+                       (ex_mem_rd == dec_rd));
 
-wire [63:0] fwd_a = match_ex_rs ? ex_mem_res :
-                    match_wb_rs ? mem_wb_res : rf_a;
+wire stall_if = load_use_hazard;
 
-wire [63:0] fwd_b = match_ex_rt ? ex_mem_res :
-                    match_wb_rt ? mem_wb_res : rf_b;
+/* forwarded operands for the upcoming EX stage */
+wire fwd_ex_rs = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
+                  (id_ex_rd == dec_rs));
+wire fwd_mem_rs = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
+                   (ex_mem_rd == dec_rs));
+wire fwd_wb_rs  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
+                   (mem_wb_rd == dec_rs));
 
-wire [63:0] fwd_c = match_ex_rd ? ex_mem_res :
-                    match_wb_rd ? mem_wb_res : rf_c;
+wire fwd_ex_rt = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
+                  (id_ex_rd == dec_rt));
+wire fwd_mem_rt = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
+                   (ex_mem_rd == dec_rt));
+wire fwd_wb_rt  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
+                   (mem_wb_rd == dec_rt));
 
-/* no generic data stalls any more -----------------------------*/
-wire stall_if = 1'b0;
+wire fwd_ex_rd = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
+                  (id_ex_rd == dec_rd));
+wire fwd_mem_rd = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
+                   (ex_mem_rd == dec_rd));
+wire fwd_wb_rd  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
+                   (mem_wb_rd == dec_rd));
 
-/* bubble logic (only on flush) --------------------------------*/
+wire [63:0] dec_a = fwd_ex_rs ? alu_out  :
+                    fwd_mem_rs ? ex_mem_res :
+                    fwd_wb_rs  ? mem_wb_res : rf_a;
+
+wire [63:0] dec_b = fwd_ex_rt ? alu_out  :
+                    fwd_mem_rt ? ex_mem_res :
+                    fwd_wb_rt  ? mem_wb_res : rf_b;
+
+wire [63:0] dec_c = fwd_ex_rd ? alu_out  :
+                    fwd_mem_rd ? ex_mem_res :
+                    fwd_wb_rd  ? mem_wb_res : rf_c;
+
+/* bubble only on flush ----------------------------------------*/
 localparam [4:0] BUBBLE_OP = 5'h1f;
 wire bubble = flush_if;
 
-/* next‑state for id/ex ----------------------------------------*/
+/* next‑state for ID/EX ----------------------------------------*/
 wire [4:0]  nxt_op  = bubble ? BUBBLE_OP : dec_op;
 wire [4:0]  nxt_rd  = bubble ? 5'd0      : dec_rd;
 wire [4:0]  nxt_rs  = bubble ? 5'd0      : dec_rs;
 wire [4:0]  nxt_rt  = bubble ? 5'd0      : dec_rt;
 
-wire [63:0] nxt_a   = bubble ? 64'd0 : fwd_a;
-wire [63:0] nxt_b   = bubble ? 64'd0 : fwd_b;
-wire [63:0] nxt_c   = bubble ? 64'd0 : fwd_c;
+wire [63:0] nxt_a   = bubble ? 64'd0 : dec_a;
+wire [63:0] nxt_b   = bubble ? 64'd0 : dec_b;
+wire [63:0] nxt_c   = bubble ? 64'd0 : dec_c;
 wire [63:0] nxt_imm = bubble ? 64'd0 : imm_ext;
 wire [63:0] nxt_pc4 = bubble ? 64'd0 : if_id_pc4;
 wire [63:0] nxt_sp  = bubble ? 64'd0 : sp_val;
@@ -319,9 +351,10 @@ alu alu_inst (
     .halt_flag(alu_hlt)
 );
 
-assign flush_if = alu_br;  // branch resolved
+assign flush_if = alu_br;  // taken branch flushes next IF/ID
 
-/* ex/mem latches ----------------------------------------------*/
+/* EX/MEM latches ----------------------------------------------*/
+wire [4:0]  nxt_ex_mem_op   = id_ex_op;
 wire [4:0]  nxt_ex_mem_rd   = id_ex_rd;
 wire [63:0] nxt_ex_mem_res  = alu_out;
 wire [63:0] nxt_ex_mem_addr = alu_addr;
@@ -331,7 +364,7 @@ wire        nxt_ex_mem_we_r = alu_we_reg;
 wire        nxt_ex_mem_we_m = alu_we_mem;
 wire        nxt_ex_mem_hlt  = alu_hlt;
 
-/* mem/wb latches ----------------------------------------------*/
+/* MEM/WB latches ----------------------------------------------*/
 wire [4:0]  nxt_mem_wb_rd   = ex_mem_rd;
 wire [63:0] nxt_mem_wb_res  = ex_mem_res;
 wire        nxt_mem_wb_we_r = ex_mem_we_reg;
@@ -349,8 +382,9 @@ always @(posedge clk or posedge reset) begin
         id_ex_a   <= 0; id_ex_b <= 0; id_ex_c <= 0;
         id_ex_imm <= 0; id_ex_pc4 <= 0; id_ex_sp <= 0;
 
-        ex_mem_rd <= 0; ex_mem_res <= 0; ex_mem_addr <= 0; ex_mem_npc <= 0;
-        ex_mem_br <= 0; ex_mem_we_reg <= 0; ex_mem_we_mem <= 0; ex_mem_hlt <= 0;
+        ex_mem_op <= 0; ex_mem_rd <= 0; ex_mem_res <= 0; ex_mem_addr <= 0;
+        ex_mem_npc <= 0; ex_mem_br <= 0;
+        ex_mem_we_reg <= 0; ex_mem_we_mem <= 0; ex_mem_hlt <= 0;
 
         mem_wb_rd <= 0; mem_wb_res <= 0; mem_wb_we_reg <= 0; mem_wb_hlt <= 0;
 
@@ -359,23 +393,28 @@ always @(posedge clk or posedge reset) begin
         if (flush_if)        pc_reg <= alu_npc;
         else if (!stall_if)  pc_reg <= pc_plus4;
 
-        /* if/id */
-        if_id_ir  <= flush_if ? 32'd0 : (stall_if ? if_id_ir  : instr_fetch);
-        if_id_pc4 <= flush_if ? 64'd0 : (stall_if ? if_id_pc4 : pc_plus4);
+        /* IF/ID */
+        if (!stall_if) begin
+            if_id_ir  <= flush_if ? 32'd0 : instr_fetch;
+            if_id_pc4 <= flush_if ? 64'd0 : pc_plus4;
+        end
 
-        /* id/ex */
-        id_ex_op   <= nxt_op;
-        id_ex_rd   <= nxt_rd;
-        id_ex_rs   <= nxt_rs;
-        id_ex_rt   <= nxt_rt;
-        id_ex_a    <= nxt_a;
-        id_ex_b    <= nxt_b;
-        id_ex_c    <= nxt_c;
-        id_ex_imm  <= nxt_imm;
-        id_ex_pc4  <= nxt_pc4;
-        id_ex_sp   <= nxt_sp;
+        /* ID/EX */
+        if (!stall_if) begin
+            id_ex_op   <= nxt_op;
+            id_ex_rd   <= nxt_rd;
+            id_ex_rs   <= nxt_rs;
+            id_ex_rt   <= nxt_rt;
+            id_ex_a    <= nxt_a;
+            id_ex_b    <= nxt_b;
+            id_ex_c    <= nxt_c;
+            id_ex_imm  <= nxt_imm;
+            id_ex_pc4  <= nxt_pc4;
+            id_ex_sp   <= nxt_sp;
+        end
 
-        /* ex/mem */
+        /* EX/MEM */
+        ex_mem_op       <= nxt_ex_mem_op;
         ex_mem_rd       <= nxt_ex_mem_rd;
         ex_mem_res      <= nxt_ex_mem_res;
         ex_mem_addr     <= nxt_ex_mem_addr;
@@ -385,7 +424,7 @@ always @(posedge clk or posedge reset) begin
         ex_mem_we_mem   <= nxt_ex_mem_we_m;
         ex_mem_hlt      <= nxt_ex_mem_hlt;
 
-        /* mem/wb */
+        /* MEM/WB */
         mem_wb_rd      <= nxt_mem_wb_rd;
         mem_wb_res     <= nxt_mem_wb_res;
         mem_wb_we_reg  <= nxt_mem_wb_we_r;
