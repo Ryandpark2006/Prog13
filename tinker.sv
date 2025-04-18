@@ -261,16 +261,16 @@ wire [63:0] sext = {{52{lit[11]}}, lit};
 
 /* hazard detect */
 // wire idex_regw = (id_ex_op != 5'h1f) && (id_ex_op < 5'h08 || id_ex_op > 5'h0f) && (id_ex_op != 5'h13);
-wire idex_regw = (decoderToAluOpcode != 5'h1F) &&           // not a bubble
-                    (decoderToAluOpcode != 5'h08) &&           // br
-                    (decoderToAluOpcode != 5'h09) &&           // brr rd
-                    (decoderToAluOpcode != 5'h0a) &&           // brr L
-                    (decoderToAluOpcode != 5'h0b) &&           // brnz
-                    (decoderToAluOpcode != 5'h0c) &&           // call
-                    (decoderToAluOpcode != 5'h0d) &&           // return
-                    (decoderToAluOpcode != 5'h0e) &&           // brgt
-                    (decoderToAluOpcode != 5'h0f) &&           // halt/priv
-                    (decoderToAluOpcode != 5'h13);             // store
+wire idex_reg = (id_ex_op != 5'h1F) &&           // not a bubble
+                    (id_ex_op != 5'h08) &&           // br
+                    (id_ex_op != 5'h09) &&           // brr rd
+                    (id_ex_op != 5'h0a) &&           // brr L
+                    (id_ex_op != 5'h0b) &&           // brnz
+                    (id_ex_op != 5'h0c) &&           // call
+                    (id_ex_op != 5'h0d) &&           // return
+                    (id_ex_op != 5'h0e) &&           // brgt
+                    (id_ex_op != 5'h0f) &&           // halt/priv
+                    (id_ex_op != 5'h13);             // store
 wire raw_idex = idex_regw   && ((id_ex_rd==rs)||(id_ex_rd==rt)||(id_ex_rd==rd));
 wire raw_ex   = ex_mem_regw && ((ex_mem_rd==rs)||(ex_mem_rd==rt)||(ex_mem_rd==rd));
 wire raw_mem  = mem_wb_regw && ((mem_wb_rd==rs)||(mem_wb_rd==rt)||(mem_wb_rd==rd));
