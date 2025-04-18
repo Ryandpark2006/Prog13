@@ -15,3 +15,5 @@ between each test case is 5 clock cycles to allow the reset to propogate through
 Optimizations: 
 Forwarding 
 
+Specifically, my code currently lets the next instruction consume a result as soon as it is produced (same cycle for EX results, one cycle later for MEM results) instead of waiting until the WB stage writes the register file. Furthermore, if a load result is not ready until the MEM stage, the code detects exactly that special case and inserts a single bubble instead of blindly stalling on every RAW hazard. Also, the comparator network gives EX‑stage results higher priority than MEM‑stage results.
+
