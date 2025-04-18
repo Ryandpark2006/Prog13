@@ -313,14 +313,27 @@ module tinker_core(
                 ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
                 : ID_EX_A;
 
-    wire [63:0] aluOp2_pre = ID_EX_B;
+    // wire [63:0] aluOp2_pre = ID_EX_B;
+    // wire [63:0] aluOp2 = ID_EX_rtPassed
+    //     ? aluOp2_pre
+    //     : (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
+    //         ? EX_MEM_ALU
+    //         : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
+    //             ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+    //             : aluOp2_pre;
+        // literal value (sign‐extend L) vs. register
+    wire [63:0] literal = {{52{ID_EX_L[11]}}, ID_EX_L};
+    // if rtPassed==0 → literal branch, otherwise register→forward/register
     wire [63:0] aluOp2 = ID_EX_rtPassed
-        ? aluOp2_pre
-        : (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
-            ? EX_MEM_ALU
-            : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
-                ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-                : aluOp2_pre;
+        // → register operand: try EX stage forward, then MEM stage, else the ID_EX_B
+        ? ((EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
+               ? EX_MEM_ALU
+               : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
+                   ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+                   : ID_EX_B)
+        // → literal operand: just use the sign‐extended immediate
+        : literal;
+
 
     // ALU instance
     wire [63:0] aluResult, aluUpdatedNext;
