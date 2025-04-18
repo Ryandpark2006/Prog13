@@ -84,7 +84,7 @@ module ALU(
                 rw_addr          = r31_val - 8;
                 changing_pc      = 1'b1;
                 updated_next     = r_out;
-                result           = r_out;
+                // result           = r_out;
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
@@ -94,11 +94,6 @@ module ALU(
                 rw_addr          = r31_val - 8;
                 updated_next     = rdVal;
             end
-
-            5'b10100: result = $realtobits($bitstoreal(operand1) + $bitstoreal(operand2));
-            5'b10101: result = $realtobits($bitstoreal(operand1) - $bitstoreal(operand2));
-            5'b10110: result = $realtobits($bitstoreal(operand1) * $bitstoreal(operand2));
-            5'b10111: result = $realtobits($bitstoreal(operand1) / $bitstoreal(operand2));
 
             default: begin
                 writeEnable      = 1'b0;
