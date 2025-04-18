@@ -22,9 +22,9 @@ module ALU(
         case (opcode)
             // Arithmetic
             5'b11000: result = operand1 + operand2;  // add
-            5'b11001: result = operand1 + {{52{1'b0}}, operand2[11:0]};  // addi unsigned
+            5'b11001: result = operand1 + operand2;  // addi
             5'b11010: result = operand1 - operand2;  // sub
-            5'b11011: result = operand1 - {{52{1'b0}}, operand2[11:0]};  // subi unsigned
+            5'b11011: result = operand1 - operand2;  // subi
             5'b11100: result = operand1 * operand2;  // mul
             5'b11101: result = operand1 / operand2;  // div
 
@@ -33,19 +33,19 @@ module ALU(
             5'b00001: result = operand1 | operand2;  // or
             5'b00010: result = operand1 ^ operand2;  // xor
             5'b00011: result = ~operand1;            // not
-            5'b00100,
+            5'b00100: result = operand1 >> operand2;
             5'b00101: result = operand1 >> operand2;
-            5'b00110,
+            5'b00110: result = operand1 << operand2;
             5'b00111: result = operand1 << operand2;
 
             // Data movement
-            5'b10001: result = operand1;  // mov rd, rs
-            5'b10010: result = {rdVal[63:12], operand2[11:0]};  // mov rd, L preserves upper bits
-            5'b10000: begin  // load
+            5'b10001: result = operand1;             // mov rd, rs
+            5'b10010: result = operand2;             // mov rd, L (literal)
+            5'b10000: begin                          // load
                 rw_addr = operand1 + operand2;
                 result  = r_out;
             end
-            5'b10011: begin  // store
+            5'b10011: begin                          // store
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b1;
                 rw_addr          = rdVal + operand2;
@@ -53,35 +53,36 @@ module ALU(
             end
 
             // Control
-            5'b01000: begin  // jump
+            5'b01000: begin // jump
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
                 updated_next = rdVal;
             end
-            5'b01001: begin  // jump rel
+            5'b01001: begin // jump rel
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
                 updated_next = pc + rdVal;
             end
-            5'b01010: begin  // jump rel2
+            5'b01010: begin // jump rel2
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
                 updated_next = pc + operand2;
             end
-            5'b01011: begin  // brnz
+            5'b01011: begin // brnz
                 writeEnable = 1'b0;
                 if (operand1 != 64'd0) begin
                     changing_pc = 1'b1;
                     updated_next = rdVal;
                 end
             end
-            5'b01101: begin  // return
+            5'b01101: begin // return
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
+                mem_write_enable = 1'b1;
                 rw_addr          = r31_val - 8;
                 updated_next     = r_out;
             end
-            5'b01100: begin  // call
+            5'b01100: begin // call
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
                 mem_write_enable = 1'b1;
@@ -89,12 +90,17 @@ module ALU(
                 rw_addr          = r31_val - 8;
                 updated_next     = rdVal;
             end
-            5'b01110: begin  // brgt
+            5'b01110: begin // brgt
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
 
+            // Floating
+            5'b10100: result = $realtobits($bitstoreal(operand1) + $bitstoreal(operand2));
+            5'b10101: result = $realtobits($bitstoreal(operand1) - $bitstoreal(operand2));
+            5'b10110: result = $realtobits($bitstoreal(operand1) * $bitstoreal(operand2));
+            5'b10111: result = $realtobits($bitstoreal(operand1) / $bitstoreal(operand2));
             default: begin
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b0;
@@ -102,120 +108,7 @@ module ALU(
         endcase
     end
 endmodule
-// module ALU(
-//     input wire [63:0] pc,
-//     input wire [63:0] rdVal,
-//     input wire [63:0] operand1,
-//     input wire [63:0] operand2,
-//     input wire [4:0] opcode,
-//     input wire [63:0] r_out,
-//     input wire [63:0] r31_val,
-//     output reg [63:0] result,
-//     output reg writeEnable,
-//     output reg mem_write_enable,
-//     output reg [31:0] rw_addr,
-//     output reg [63:0] rw_val,
-//     output reg [63:0] updated_next,
-//     output reg changing_pc
-// );
-//     always @(*) begin
-//         writeEnable      = 1'b1;
-//         mem_write_enable = 1'b0;
-//         changing_pc      = 1'b0;
-//         updated_next     = pc + 4;
-//         case (opcode)
-//             // Arithmetic
-//             5'b11000: result = operand1 + operand2;  // add
-//             5'b11001: result = operand1 + operand2;  // addi
-//             5'b11010: result = operand1 - operand2;  // sub
-//             5'b11011: result = operand1 - operand2;  // subi
-//             5'b11100: result = operand1 * operand2;  // mul
-//             5'b11101: result = operand1 / operand2;  // div
 
-//             // Logic
-//             5'b00000: result = operand1 & operand2;  // and
-//             5'b00001: result = operand1 | operand2;  // or
-//             5'b00010: result = operand1 ^ operand2;  // xor
-//             5'b00011: result = ~operand1;            // not
-//             5'b00100: result = operand1 >> operand2;
-//             5'b00101: result = operand1 >> operand2;
-//             5'b00110: result = operand1 << operand2;
-//             5'b00111: result = operand1 << operand2;
-
-//             // Data movement
-//             5'b10001: result = operand1;             // mov rd, rs
-//             5'b10010: result = operand2;             // mov rd, L (literal)
-//             5'b10000: begin                          // load
-//                 rw_addr = operand1 + operand2;
-//                 result  = r_out;
-//             end
-//             5'b10011: begin                          // store
-//                 writeEnable      = 1'b0;
-//                 mem_write_enable = 1'b1;
-//                 rw_addr          = rdVal + operand2;
-//                 rw_val           = operand1;
-//             end
-
-//             // Control
-//             5'b01000: begin // jump
-//                 writeEnable = 1'b0;
-//                 changing_pc = 1'b1;
-//                 updated_next = rdVal;
-//             end
-//             5'b01001: begin // jump rel
-//                 writeEnable = 1'b0;
-//                 changing_pc = 1'b1;
-//                 updated_next = pc + rdVal;
-//             end
-//             5'b01010: begin // jump rel2
-//                 writeEnable = 1'b0;
-//                 changing_pc = 1'b1;
-//                 updated_next = pc + operand2;
-//             end
-//             5'b01011: begin // brnz
-//                 writeEnable = 1'b0;
-//                 if (operand1 != 64'd0) begin
-//                     changing_pc = 1'b1;
-//                     updated_next = rdVal;
-//                 end
-//             end
-//             5'b01101: begin // return
-//                 writeEnable      = 1'b0;
-//                 changing_pc      = 1'b1;
-//                 mem_write_enable = 1'b1;
-//                 rw_addr          = r31_val - 8;
-//                 updated_next     = r_out;
-//             end
-//             5'b01100: begin // call
-//                 writeEnable      = 1'b0;
-//                 changing_pc      = 1'b1;
-//                 mem_write_enable = 1'b1;
-//                 rw_val           = pc + 4;
-//                 rw_addr          = r31_val - 8;
-//                 updated_next     = rdVal;
-//             end
-//             5'b01110: begin // brgt
-//                 writeEnable = 1'b0;
-//                 changing_pc = 1'b1;
-//                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
-//             end
-
-//             // Floating
-//             5'b10100: result = $realtobits($bitstoreal(operand1) + $bitstoreal(operand2));
-//             5'b10101: result = $realtobits($bitstoreal(operand1) - $bitstoreal(operand2));
-//             5'b10110: result = $realtobits($bitstoreal(operand1) * $bitstoreal(operand2));
-//             5'b10111: result = $realtobits($bitstoreal(operand1) / $bitstoreal(operand2));
-//             default: begin
-//                 writeEnable      = 1'b0;
-//                 mem_write_enable = 1'b0;
-//             end
-//         endcase
-//     end
-// endmodule
-
-//------------------------------------------------------
-// FPU Module
-//------------------------------------------------------
 module FPU(
     input wire [63:0] operand1,
     input wire [63:0] operand2,
@@ -235,9 +128,6 @@ module FPU(
     end
 endmodule
 
-//------------------------------------------------------
-// Instruction Decoder
-//------------------------------------------------------
 module instruction_decoder(
     input  wire [31:0] instruction,
     output wire [4:0]  controlSignal,
@@ -259,9 +149,6 @@ module instruction_decoder(
                            ? 0 : 1;
 endmodule
 
-//------------------------------------------------------
-// Memory
-//------------------------------------------------------
 module memory(
     input  wire [63:0] pc,
     input  wire       clk,
@@ -294,9 +181,6 @@ module memory(
     end
 endmodule
 
-//------------------------------------------------------
-// Register File
-//------------------------------------------------------
 module register_file(
     input  wire        clk,
     input  wire        reset,
@@ -329,19 +213,13 @@ module register_file(
     end
 endmodule
 
-// Pipelined Tinker Core (Vanilla 5-Stage) with fixed operand decoding
-// + Branch flush, forwarding, WB-stage HALT, and unconditional 2-cycle startup stall
-
-// Fully edited Pipelined Tinker Core (Vanilla 5-Stage)
-// Includes fixes for forwarding logic, literal handling, branch flush, WB-stage HALT, and 5-cycle startup stall
-
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
     output wire        hlt
 );
     reg [63:0] PC;
-    reg [2:0]  stall_cnt;
+    reg [1:0]  stall_cnt;
     reg [63:0] IF_ID_PC;
     reg [31:0] IF_ID_IR;
 
@@ -359,22 +237,31 @@ module tinker_core(
     );
 
     reg [63:0] ID_EX_PC;
-    reg [4:0]  ID_EX_ctrl, ID_EX_rd, ID_EX_rs, ID_EX_rt;
+    reg [4:0]  ID_EX_ctrl;
+    reg [4:0]  ID_EX_rd, ID_EX_rs, ID_EX_rt;
     reg [11:0] ID_EX_L;
     reg        ID_EX_rtPassed;
-    reg [63:0] ID_EX_A, ID_EX_B, ID_EX_r31, ID_EX_rdVal;
+    reg [63:0] ID_EX_A, ID_EX_B;
+    reg [63:0] ID_EX_r31;
+    reg [63:0] ID_EX_rdVal;
 
-    reg [4:0]  EX_MEM_ctrl, EX_MEM_rd;
-    reg [63:0] EX_MEM_ALU, EX_MEM_B;
-    reg        EX_MEM_memWrite, EX_MEM_regWrite;
+    reg [4:0]  EX_MEM_ctrl;
+    reg [4:0]  EX_MEM_rd;
+    reg [63:0] EX_MEM_ALU;
+    reg [63:0] EX_MEM_B;
+    reg        EX_MEM_memWrite;
+    reg        EX_MEM_regWrite;
     reg [31:0] EX_MEM_addr;
     reg [63:0] EX_MEM_wrData;
     reg        EX_MEM_changePC;
     reg [63:0] EX_MEM_target;
 
-    reg [4:0]  MEM_WB_ctrl, MEM_WB_rd;
-    reg [63:0] MEM_WB_ALU, MEM_WB_memData;
-    reg        MEM_WB_regWrite, MEM_WB_memToReg;
+    reg [4:0]  MEM_WB_ctrl;
+    reg [4:0]  MEM_WB_rd;
+    reg [63:0] MEM_WB_ALU;
+    reg [63:0] MEM_WB_memData;
+    reg        MEM_WB_regWrite;
+    reg        MEM_WB_memToReg;
 
     wire [31:0] inst;
     wire [63:0] mem_rdata;
@@ -398,7 +285,7 @@ module tinker_core(
         .readAddress1(IF_rs),
         .readAddress2(IF_rt),
         .writeAddress(MEM_WB_rd),
-        .lPassed     (~IF_rtPassed),
+        .lPassed     (~IF_rtPassed),    // invert: 1 means literal, 0 means register
         .L           (IF_L),
         .value1      (regOut1),
         .value2      (regOut2),
@@ -406,93 +293,159 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    wire [63:0] aluOp1 = (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
-                         ? EX_MEM_ALU
-                         : (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
-                           ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-                           : ID_EX_A;
-
-    wire [63:0] aluOp2 = ID_EX_rtPassed ? 
-        ((EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt)
-          ? EX_MEM_ALU
-          : (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt)
-            ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-            : ID_EX_B)
-        : {{52{1'b0}}, ID_EX_L};
+    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)  // addi or subi
+        ? ID_EX_rdVal  // use rd value
+        : (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
+            ? EX_MEM_ALU
+            : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
+                ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+                : ID_EX_A;
+    wire [63:0] aluOp2_pre = ID_EX_B;
+    wire [63:0] aluOp2 = ID_EX_rtPassed ? aluOp2_pre
+                         : (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt)
+                           ? EX_MEM_ALU
+                           : (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt)
+                             ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+                             : aluOp2_pre;
 
     wire [63:0] aluResult, aluUpdatedNext;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
     wire [31:0] aluAddr;
     wire [63:0] aluWrData;
     ALU ALU_INST(
-        .pc              (ID_EX_PC),
-        .rdVal           (ID_EX_rdVal),
-        .operand1        (aluOp1),
-        .operand2        (aluOp2),
-        .opcode          (ID_EX_ctrl),
-        .r_out           (mem_rdata),
-        .r31_val         (ID_EX_r31),
-        .result          (aluResult),
-        .writeEnable     (aluRegWrite),
+        .pc            (ID_EX_PC),
+        .rdVal         (ID_EX_rdVal),
+        .operand1      (aluOp1),
+        .operand2      (aluOp2),
+        .opcode        (ID_EX_ctrl),
+        .r_out         (mem_rdata),
+        .r31_val       (ID_EX_r31),
+        .result        (aluResult),
+        .writeEnable   (aluRegWrite),
         .mem_write_enable(aluMemWrite),
-        .rw_addr         (aluAddr),
-        .rw_val          (aluWrData),
-        .updated_next    (aluUpdatedNext),
-        .changing_pc     (aluChangePC)
+        .rw_addr       (aluAddr),
+        .rw_val        (aluWrData),
+        .updated_next  (aluUpdatedNext),
+        .changing_pc   (aluChangePC)
     );
 
+    // ==================================================================
+    // IF stage: 2-cycle stall, then branch flush
+    // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            PC <= 64'h2000;
-            stall_cnt <= 5;
-            IF_ID_PC <= 0;
-            IF_ID_IR <= 0;
+            PC        <= 64'h2000;
+            stall_cnt <= 2;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
         end else if (stall_cnt != 0) begin
             stall_cnt <= stall_cnt - 1;
-            IF_ID_PC <= 0;
-            IF_ID_IR <= 0;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 32'b0;
         end else if (EX_MEM_changePC) begin
-            PC <= EX_MEM_target;
-            IF_ID_PC <= 0;
-            IF_ID_IR <= 0;
+            PC        <= EX_MEM_target;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 32'b0;
         end else begin
-            PC <= PC + 4;
-            IF_ID_PC <= PC;
-            IF_ID_IR <= inst;
+            PC        <= PC + 4;
+            IF_ID_PC  <= PC;
+            IF_ID_IR  <= inst;
         end
     end
 
-    // -------------------------
-    // ID Stage Latching Logic
-    // -------------------------
+    // ==================================================================
+    // ID stage: flush on branch or during stall
+    // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            ID_EX_PC        <= 0;
-            ID_EX_ctrl      <= 0;
-            ID_EX_rd        <= 0;
-            ID_EX_rs        <= 0;
-            ID_EX_rt        <= 0;
-            ID_EX_L         <= 0;
-            ID_EX_rtPassed  <= 0;
-            ID_EX_A         <= 0;
-            ID_EX_B         <= 0;
-            ID_EX_rdVal     <= 0;
-            ID_EX_r31       <= 0;
+            ID_EX_ctrl     <= 0;
+            ID_EX_rd       <= 0;
+            ID_EX_rs       <= 0;
+            ID_EX_rt       <= 0;
+            ID_EX_L        <= 0;
+            ID_EX_rtPassed <= 0;
+            ID_EX_A        <= 0;
+            ID_EX_B        <= 0;
+            ID_EX_PC       <= 0;
+            ID_EX_r31      <= 0;
+            ID_EX_rdVal    <= 0;
+        end else if (stall_cnt != 0 || EX_MEM_changePC) begin
+            // insert bubble
+            ID_EX_ctrl     <= 5'b00000;
+            ID_EX_rd       <= 0;
+            ID_EX_rs       <= 0;
+            ID_EX_rt       <= 0;
+            ID_EX_L        <= 0;
+            ID_EX_rtPassed <= 0;
+            ID_EX_A        <= 0;
+            ID_EX_B        <= 0;
+            ID_EX_PC       <= 0;
+            ID_EX_r31      <= 0;
+            ID_EX_rdVal    <= 0;
         end else begin
-            ID_EX_PC        <= IF_ID_PC;
-            ID_EX_ctrl      <= IF_ctrl;
-            ID_EX_rd        <= IF_rd;
-            ID_EX_rs        <= IF_rs;
-            ID_EX_rt        <= IF_rt;
-            ID_EX_L         <= IF_L;
-            ID_EX_rtPassed  <= IF_rtPassed;
-            ID_EX_A         <= regOut1;
-            ID_EX_B         <= regOut2;
-            ID_EX_rdVal     <= rdVal;
-            ID_EX_r31       <= r31Val;
+            ID_EX_ctrl     <= IF_ctrl;
+            ID_EX_rd       <= IF_rd;
+            ID_EX_rs       <= IF_rs;
+            ID_EX_rt       <= IF_rt;
+            ID_EX_L        <= IF_L;
+            ID_EX_rtPassed <= IF_rtPassed;
+            ID_EX_A        <= regOut1;
+            ID_EX_B        <= regOut2;
+            ID_EX_PC       <= IF_ID_PC;
+            ID_EX_r31      <= r31Val;
+            ID_EX_rdVal    <= rdVal;
         end
     end
 
+    // ==================================================================
+    // EX stage: latch ALU results and branch info
+    // ==================================================================
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            EX_MEM_ctrl     <= 0;
+            EX_MEM_rd       <= 0;
+            EX_MEM_ALU      <= 0;
+            EX_MEM_B        <= 0;
+            EX_MEM_memWrite <= 0;
+            EX_MEM_regWrite <= 0;
+            EX_MEM_addr     <= 0;
+            EX_MEM_wrData   <= 0;
+            EX_MEM_changePC <= 0;
+            EX_MEM_target   <= 0;
+        end else begin
+            EX_MEM_ctrl     <= ID_EX_ctrl;
+            EX_MEM_rd       <= ID_EX_rd;
+            EX_MEM_ALU      <= aluResult;
+            EX_MEM_B        <= ID_EX_B;
+            EX_MEM_memWrite <= aluMemWrite;
+            EX_MEM_regWrite <= aluRegWrite;
+            EX_MEM_addr     <= aluAddr;
+            EX_MEM_wrData   <= aluWrData;
+            EX_MEM_changePC <= aluChangePC;
+            EX_MEM_target   <= aluUpdatedNext;
+        end
+    end
 
-    assign hlt = (MEM_WB_ctrl == 5'h0f);
+    // ==================================================================
+    // MEM stage: pass data to WB
+    // ==================================================================
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            MEM_WB_ctrl     <= 0;
+            MEM_WB_rd       <= 0;
+            MEM_WB_ALU      <= 0;
+            MEM_WB_memData  <= 0;
+            MEM_WB_regWrite <= 0;
+            MEM_WB_memToReg <= 0;
+        end else begin
+            MEM_WB_ctrl     <= EX_MEM_ctrl;
+            MEM_WB_rd       <= EX_MEM_rd;
+            MEM_WB_ALU      <= EX_MEM_ALU;
+            MEM_WB_memData  <= mem_rdata;
+            MEM_WB_regWrite <= EX_MEM_regWrite;
+            MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
+        end
+    end
+
+    assign hlt = (MEM_WB_ctrl == 5'h0f); // halt detection
 endmodule
