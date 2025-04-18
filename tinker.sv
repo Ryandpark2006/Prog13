@@ -81,7 +81,7 @@ module ALU(
             5'b01101: begin  // return
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
-                mem_write_enable = 1'b1;
+                mem_write_enable = 1'b0;
                 rw_addr          = r31_val - 8;
                 updated_next     = r_out;
                 // result           = r_out;
@@ -1152,29 +1152,41 @@ module tinker_core(
     initial cycle_count = 0;
 
     always @(posedge clk or posedge reset) begin
+            // in your tinker_core, replace the existing PC update always block with this:
+
+    always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC        <= 64'h2000;
+            stall_cnt <= 0;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
         end
-        else if (load_use_hazard) begin
-            // inject a NOP when you detect a load‑use hazard
+        else if (stall_cnt != 0) begin
+            // continuing an earlier multi-cycle stall
+            stall_cnt <= stall_cnt - 1;
+            // hold PC steady, bubble IF/ID
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 32'h00000000;
         end
+        else if (load_use_hazard) begin
+            // load-use hazard: stall exactly one cycle
+            stall_cnt <= 1;              // schedule one more bubble
+            IF_ID_PC  <= 0;              
+            IF_ID_IR  <= 32'h00000000;   
+            // PC is held automatically because stall_cnt!=0 next cycle
+        end
         else if (EX_MEM_changePC) begin
-            // on any jump/branch/call/return
-            PC        <= EX_MEM_target;
-            IF_ID_PC  <= 0;
+            // any branch/jump/call/return redirect
+            PC        <= EX_MEM_target;  // new PC from the ALU
+            IF_ID_PC  <= 0;              // flush
             IF_ID_IR  <= 0;
         end
         else begin
-            // normal fetch
+            // normal sequential fetch
             PC        <= PC + 4;
             IF_ID_PC  <= PC;
             IF_ID_IR  <= inst;
         end
-
 
         // Cycle counter & debug print
         cycle_count <= cycle_count + 1;
