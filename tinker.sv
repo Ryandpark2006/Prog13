@@ -467,7 +467,6 @@ endmodule
 //     assign hlt = halt_flag;
 // endmodule
 
-
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -476,11 +475,11 @@ module tinker_core(
     // Program counter & FSM
     reg [63:0] PC;
     reg halted;
-    localparam [2:0] FETCH      = 3'd0,
-                     DECODE     = 3'd1,
-                     EXECUTE    = 3'd2,
-                     MEM        = 3'd3,
-                     WRITEBACK  = 3'd4;
+    localparam [2:0] FETCH     = 3'd0,
+                     DECODE    = 3'd1,
+                     EXECUTE   = 3'd2,
+                     MEM       = 3'd3,
+                     WRITEBACK = 3'd4;
     reg [2:0] state, next_state;
 
     // Pipeline registers
@@ -505,15 +504,15 @@ module tinker_core(
     reg [63:0] MEM_WB_ALU, MEM_WB_memData;
     reg        MEM_WB_regWrite, MEM_WB_memToReg;
 
-    // IF stage wires
+    // IF wires
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    wire        local_hlt;
 
-    // Instantiate memory
-    memory memory(
-        .pc(pc),
-        .clk(clk), .reset(reset),
+    // Instantiate memory with correct PC
+    memory memory_inst(
+        .pc(PC),
+        .clk(clk),
+        .reset(reset),
         .mem_write_enable(EX_MEM_memWrite),
         .rw_val(EX_MEM_wrData),
         .rw_addr(EX_MEM_addr),
@@ -521,66 +520,85 @@ module tinker_core(
         .r_out(mem_rdata)
     );
 
-    // Decoder
+    // Decode
     wire [4:0] controlSignal, rd, rs, rt;
     wire [11:0] L;
     wire        rtPassed;
-    instruction_decoder dec(
+    instruction_decoder dec_inst(
         .instruction(IF_ID_IR),
         .controlSignal(controlSignal),
-        .rd(rd), .rs(rs), .rt(rt), .L(L), .rtPassed(rtPassed)
+        .rd(rd),
+        .rs(rs),
+        .rt(rt),
+        .L(L),
+        .rtPassed(rtPassed)
     );
 
     // Register file
     wire [63:0] regOut1, regOut2, rdVal, r31_val;
-    register_file reg_file(
-        .clk(clk), .reset(reset),
+    register_file regfile_inst(
+        .clk(clk),
+        .reset(reset),
         .write_enable(MEM_WB_regWrite),
         .dataInput(MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
-        .readAddress1(rs), .readAddress2(rt), .readAddress3(rd),
+        .readAddress1(rs),
+        .readAddress2(rt),
+        .readAddress3(rd),
         .writeAddress(MEM_WB_rd),
-        .lPassed(~rtPassed), .L(L),
-        .value1(regOut1), .value2(regOut2), .rdVal(rdVal), .r31_val(r31_val)
+        .lPassed(~rtPassed),
+        .L(L),
+        .value1(regOut1),
+        .value2(regOut2),
+        .rdVal(rdVal),
+        .r31_val(r31_val)
     );
 
     // ALU operand forwarding
-    wire [63:0] aluOp1 = (ID_EX_ctrl==5'b11001||ID_EX_ctrl==5'b11011)?ID_EX_rdVal:
-        (EX_MEM_regWrite&&EX_MEM_rd!=0&&EX_MEM_rd==ID_EX_rs)?EX_MEM_ALU:
-        (MEM_WB_regWrite&&MEM_WB_rd!=0&&MEM_WB_rd==ID_EX_rs)?
-            (MEM_WB_memToReg?MEM_WB_memData:MEM_WB_ALU):ID_EX_A;
+    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011) ? ID_EX_rdVal :
+        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs) ? EX_MEM_ALU :
+        (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs) ?
+            (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_A;
     wire [63:0] literal = {{52{ID_EX_L[11]}}, ID_EX_L};
     wire [63:0] aluOp2 = ID_EX_rtPassed ?
-        ((EX_MEM_regWrite&&EX_MEM_rd!=0&&EX_MEM_rd==ID_EX_rt)?EX_MEM_ALU:
-         (MEM_WB_regWrite&&MEM_WB_rd!=0&&MEM_WB_rd==ID_EX_rt)?
-            (MEM_WB_memToReg?MEM_WB_memData:MEM_WB_ALU):ID_EX_B)
+        ((EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt) ? EX_MEM_ALU :
+         (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt) ?
+             (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_B)
         : literal;
 
-    // ALU
+    // ALU instance
     wire [63:0] aluResult, aluUpdatedNext;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
     wire [31:0] aluAddr;
     wire [63:0] aluWrData;
-    ALU ALU_INST(
-        .pc(ID_EX_PC), .rdVal(ID_EX_rdVal), .operand1(aluOp1), .operand2(aluOp2),
-        .opcode(ID_EX_ctrl), .r_out(mem_rdata), .r31_val(ID_EX_r31),
-        .result(aluResult), .writeEnable(aluRegWrite),
-        .mem_write_enable(aluMemWrite), .rw_addr(aluAddr), .rw_val(aluWrData),
-        .updated_next(aluUpdatedNext), .changing_pc(aluChangePC)
+    ALU alu_inst(
+        .pc(ID_EX_PC),
+        .rdVal(ID_EX_rdVal),
+        .operand1(aluOp1),
+        .operand2(aluOp2),
+        .opcode(ID_EX_ctrl),
+        .r_out(mem_rdata),
+        .r31_val(ID_EX_r31),
+        .result(aluResult),
+        .writeEnable(aluRegWrite),
+        .mem_write_enable(aluMemWrite),
+        .rw_addr(aluAddr),
+        .rw_val(aluWrData),
+        .updated_next(aluUpdatedNext),
+        .changing_pc(aluChangePC)
     );
 
-    // FPU
+    // FPU instance
     wire [63:0] fpuResult;
     wire        fpuWriteEnable;
     FPU fpu_inst(
-        .operand1(ID_EX_A), .operand2(ID_EX_B), .opcode(ID_EX_ctrl),
-        .result(fpuResult), .writeEnable(fpuWriteEnable)
+        .operand1(ID_EX_A),
+        .operand2(ID_EX_B),
+        .opcode(ID_EX_ctrl),
+        .result(fpuResult),
+        .writeEnable(fpuWriteEnable)
     );
 
-    assign local_hlt = (controlSignal==5'h0f);
-
-    // ==================================================================
-    // FSM main (does NOT assign PC)
-    // ==================================================================
+    // FSM main: FETCH/DECODE/EXECUTE/MEM/WRITEBACK without PC update
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             state      <= FETCH;
@@ -590,12 +608,13 @@ module tinker_core(
             IF_ID_IR   <= 32'b0;
             ID_EX_PC   <= 64'b0;
             ID_EX_ctrl <= 5'b0;
-            // ... reset all pipeline regs to zero ...
+            // reset other pipeline regs to zero
         end else begin
+            // advance state
             state <= next_state;
 
-            // IF
-            if (stall_cnt!=0) begin
+            // IF stage
+            if (stall_cnt != 0) begin
                 stall_cnt <= stall_cnt - 1;
                 IF_ID_PC  <= 64'b0;
                 IF_ID_IR  <= 32'b0;
@@ -607,20 +626,20 @@ module tinker_core(
                 IF_ID_IR <= inst;
             end
 
-            // ID
-            ID_EX_PC      <= IF_ID_PC;
-            ID_EX_ctrl    <= IF_ctrl;
-            ID_EX_rd      <= IF_rd;
-            ID_EX_rs      <= IF_rs;
-            ID_EX_rt      <= IF_rt;
-            ID_EX_L       <= IF_L;
-            ID_EX_rtPassed<= IF_rtPassed;
-            ID_EX_A       <= regOut1;
-            ID_EX_B       <= regOut2;
-            ID_EX_r31     <= r31_val;
-            ID_EX_rdVal   <= rdVal;
+            // ID stage
+            ID_EX_PC       <= IF_ID_PC;
+            ID_EX_ctrl     <= controlSignal;
+            ID_EX_rd       <= rd;
+            ID_EX_rs       <= rs;
+            ID_EX_rt       <= rt;
+            ID_EX_L        <= L;
+            ID_EX_rtPassed <= rtPassed;
+            ID_EX_A        <= regOut1;
+            ID_EX_B        <= regOut2;
+            ID_EX_r31      <= r31_val;
+            ID_EX_rdVal    <= rdVal;
 
-            // EX → MEM
+            // EX stage -> MEM
             EX_MEM_ctrl     <= ID_EX_ctrl;
             EX_MEM_rd       <= ID_EX_rd;
             EX_MEM_ALU      <= aluResult;
@@ -632,7 +651,7 @@ module tinker_core(
             EX_MEM_changePC <= aluChangePC;
             EX_MEM_target   <= aluUpdatedNext;
 
-            // MEM → WB
+            // MEM stage -> WB
             MEM_WB_ctrl     <= EX_MEM_ctrl;
             MEM_WB_rd       <= EX_MEM_rd;
             MEM_WB_ALU      <= EX_MEM_ALU;
@@ -640,31 +659,25 @@ module tinker_core(
             MEM_WB_regWrite <= EX_MEM_regWrite;
             MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
 
-            if (local_hlt)
+            if (controlSignal == 5'h0f)
                 halted <= 1'b1;
         end
     end
 
-    // ==================================================================
-    // PC update: based on PREVIOUS state
-    // ==================================================================
+    // PC update: based on previous state so return works
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC <= 64'h2000;
         end else if (!halted) begin
             if (state == WRITEBACK) begin
                 case (controlSignal)
-                    5'b01101: PC <= mem_rdata;     // return
+                    5'b01101: PC <= mem_rdata;      // return
                     5'b01100: PC <= aluUpdatedNext; // call
                     default:  PC <= (aluChangePC ? aluUpdatedNext : PC + 4);
                 endcase
             end
-            // else: during FETCH/DECODE/EXECUTE/MEM, leave PC unchanged
         end
     end
 
-    // ==================================================================
-    // HALT logic
-    // ==================================================================
     assign hlt = halted;
 endmodule
