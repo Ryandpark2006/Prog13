@@ -230,7 +230,7 @@ assign hlt = mem_wb_hlt;
 wire [31:0] instr_fetch;
 wire [63:0] mem_rdata;
 
-memory mem_inst (
+memory memory (
     .clk(clk),
     .pc_in(pc_reg),
     .addr_in(alu_addr),
@@ -254,7 +254,7 @@ wire [63:0] imm_ext = {{52{dec_l[11]}}, dec_l};
 /* register file */
 wire [63:0] reg_a, reg_b, reg_c, sp_reg;
 
-register_file rf (
+register_file reg_file (
     .clk(clk), .reset(reset),
     .we(mem_wb_we_reg),
     .data_in(mem_wb_res),
