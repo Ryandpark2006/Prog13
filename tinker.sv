@@ -238,7 +238,6 @@ module register_file(
     end
 endmodule
 
-
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -265,12 +264,12 @@ module tinker_core(
     );
 
     wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (
-        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rs) ||
-        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
+        (IF_ctrl != 5'h1F && EX_MEM_rd == IF_rs) ||
+        (IF_ctrl != 5'h1F && EX_MEM_rd == IF_rt && IF_rtPassed)
     );
 
     wire flushFetch = aluChangePC;
-    wire fetchStall = load_use_hazard;
+    wire fetchStall = load_use_hazard || (stall_cnt != 0);
 
     wire [31:0] inst;
     wire [63:0] mem_rdata;
@@ -370,23 +369,44 @@ module tinker_core(
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            PC <= 64'h2000;
-            IF_ID_PC <= 0;
-            IF_ID_IR <= 0;
+            stall_cnt <= 0;
+        end else if (load_use_hazard) begin
+            stall_cnt <= 2;
+        end else if (stall_cnt != 0) begin
+            stall_cnt <= stall_cnt - 1;
+        end
+    end
+
+    reg halt_flag;
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            halt_flag <= 0;
+        end else if (aluHalt) begin
+            halt_flag <= 1;
+        end
+    end
+    assign hlt = halt_flag;
+
+    // IF/ID registers
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            PC        <= 64'h2000;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
         end else begin
             if (flushFetch)
                 PC <= aluUpdatedNext;
             else if (!fetchStall)
                 PC <= PC + 4;
-
             IF_ID_PC <= next_IF_ID_PC;
             IF_ID_IR <= next_IF_ID_IR;
         end
     end
 
+    // ID/EX registers
     always @(posedge clk or posedge reset) begin
-        if (reset || EX_MEM_changePC || fetchStall) begin
-            ID_EX_ctrl     <= 0;
+        if (reset || flushFetch || fetchStall) begin
+            ID_EX_ctrl     <= 5'h1F;
             ID_EX_rd       <= 0;
             ID_EX_rs       <= 0;
             ID_EX_rt       <= 0;
@@ -412,6 +432,7 @@ module tinker_core(
         end
     end
 
+    // EX/MEM registers
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -438,6 +459,7 @@ module tinker_core(
         end
     end
 
+    // MEM/WB registers
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
@@ -455,14 +477,4 @@ module tinker_core(
             MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
         end
     end
-
-    reg halt_flag;
-    always @(posedge clk or posedge reset) begin
-        if (reset)
-            halt_flag <= 0;
-        else if (aluHalt)
-            halt_flag <= 1;
-    end
-    assign hlt = halt_flag;
-
 endmodule
