@@ -79,16 +79,16 @@ module ALU(
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
             5'b01101: begin  // return
-                // writeEnable      = 1'b0;
-                // changing_pc      = 1'b1;
-                // mem_write_enable = 1'b0;
-                // rw_addr          = r31_val - 8;
-                // updated_next     = r_out;
-
                 writeEnable      = 1'b0;
-                mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
-                updated_next     = pc + 64'd8;
+                mem_write_enable = 1'b0;
+                rw_addr          = r31_val - 8;
+                updated_next     = r_out;
+
+                // writeEnable      = 1'b0;
+                // mem_write_enable = 1'b0;
+                // changing_pc      = 1'b1;
+                // updated_next     = pc + 64'd8;
 
                 // result           = r_out;
             end
@@ -390,7 +390,12 @@ module tinker_core(
             PC        <= EX_MEM_target;  // new PC from the ALU
             IF_ID_PC  <= 0;              // flush
             IF_ID_IR  <= 0;
-            stall_cnt <= 1;  // <-- force one extra bubble to flush ID/EX
+        end
+        else if(opcode == 5'b01001) begin
+            // branch instruction
+            PC        <= PC + 4 + {{52{IF_L[11]}}, IF_L};
+            IF_ID_PC  <= 0;              // flush
+            IF_ID_IR  <= 0;
         end
         else begin
             // normal sequential fetch
