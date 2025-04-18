@@ -477,7 +477,7 @@ endmodule
 // endmodule
 
 
-// FINAL FINAL FIXED TINKER_CORE MODULE: return.tk passes now
+// FIXED: Reverted branch PC updates to EX_MEM stage to avoid breaking br/brnz/brgt
 
 module tinker_core(
     input  wire        clk,
@@ -533,9 +533,6 @@ module tinker_core(
     reg [63:0] MEM_WB_memData;
     reg        MEM_WB_regWrite;
     reg        MEM_WB_memToReg;
-
-    reg [63:0] MEM_target;        // <-- Correct delayed pc target
-    reg        MEM_changePC;      // <-- Correct delayed changePC flag
 
     wire [31:0] inst;
     wire [63:0] mem_rdata;
@@ -615,8 +612,8 @@ module tinker_core(
             stall_cnt <= stall_cnt - 1;
             IF_ID_PC <= 0;
             IF_ID_IR <= 0;
-        end else if (MEM_changePC) begin
-            PC <= MEM_target;
+        end else if (EX_MEM_changePC) begin
+            PC <= EX_MEM_target;
             IF_ID_PC <= 0;
             IF_ID_IR <= 0;
         end else if (load_use_hazard) begin
@@ -632,7 +629,7 @@ module tinker_core(
 
     // ID stage
     always @(posedge clk or posedge reset) begin
-        if (reset || MEM_changePC || stall_cnt != 0) begin
+        if (reset || EX_MEM_changePC || stall_cnt != 0) begin
             ID_EX_ctrl     <= 0;
             ID_EX_rd       <= 0;
             ID_EX_rs       <= 0;
@@ -671,6 +668,7 @@ module tinker_core(
             EX_MEM_addr     <= 0;
             EX_MEM_wrData   <= 0;
             EX_MEM_changePC <= 0;
+            EX_MEM_target   <= 0;
         end else begin
             EX_MEM_ctrl     <= ID_EX_ctrl;
             EX_MEM_rd       <= ID_EX_rd;
@@ -681,6 +679,7 @@ module tinker_core(
             EX_MEM_addr     <= aluAddr;
             EX_MEM_wrData   <= aluWrData;
             EX_MEM_changePC <= aluChangePC;
+            EX_MEM_target   <= (ID_EX_ctrl == 5'b01101) ? mem_rdata : aluUpdatedNext;
         end
     end
 
@@ -693,8 +692,6 @@ module tinker_core(
             MEM_WB_memData  <= 0;
             MEM_WB_regWrite <= 0;
             MEM_WB_memToReg <= 0;
-            MEM_target      <= 0;
-            MEM_changePC    <= 0;
         end else begin
             MEM_WB_ctrl     <= EX_MEM_ctrl;
             MEM_WB_rd       <= EX_MEM_rd;
@@ -702,8 +699,6 @@ module tinker_core(
             MEM_WB_memData  <= mem_rdata;
             MEM_WB_regWrite <= EX_MEM_regWrite;
             MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
-            MEM_target      <= (EX_MEM_ctrl == 5'b01101) ? mem_rdata : EX_MEM_ALU;
-            MEM_changePC    <= EX_MEM_changePC;
         end
     end
 
