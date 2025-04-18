@@ -1,30 +1,24 @@
 module ALU(
-    input  wire [63:0] pc,
-    input  wire [63:0] rdVal,
-    input  wire [63:0] operand1,
-    input  wire [63:0] operand2,
-    input  wire [4:0]  opcode,
-    input  wire [63:0] r_out,
-    input  wire [63:0] r31_val,
-    output reg  [63:0] result,
-    output reg         writeEnable,
-    output reg         mem_write_enable,
-    output reg  [31:0] rw_addr,
-    output reg  [63:0] rw_val,
-    output reg  [63:0] updated_next,
-    output reg         changing_pc
+    input wire [63:0] pc,
+    input wire [63:0] rdVal,
+    input wire [63:0] operand1,
+    input wire [63:0] operand2,
+    input wire [4:0] opcode,
+    input wire [63:0] r_out,
+    input wire [63:0] r31_val,
+    output reg [63:0] result,
+    output reg writeEnable,
+    output reg mem_write_enable,
+    output reg [31:0] rw_addr,
+    output reg [63:0] rw_val,
+    output reg [63:0] updated_next,
+    output reg changing_pc
 );
     always @(*) begin
-        // --- full defaults to avoid inferred latches ---
-        result           = 64'd0;
-        rw_addr          = 32'd0;
-        rw_val           = 64'd0;
         writeEnable      = 1'b1;
         mem_write_enable = 1'b0;
         changing_pc      = 1'b0;
         updated_next     = pc + 4;
-        // -------------------------------------------------
-
         case (opcode)
             5'b11000: result = operand1 + operand2;  // add
             5'b11001: result = operand1 + operand2;  // addi
@@ -57,7 +51,6 @@ module ALU(
                 rw_val           = operand1;
             end
 
-            // Jumps & branches
             5'b01000: begin // jump
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
@@ -83,16 +76,21 @@ module ALU(
             5'b01110: begin // brgt
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
-                updated_next = ($signed(operand1) > $signed(operand2)) 
-                               ? rdVal 
-                               : pc + 4;
+                updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
             5'b01101: begin  // return
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
-                // no memory write on return
+                mem_write_enable = 1'b0;
                 rw_addr          = r31_val - 8;
                 updated_next     = r_out;
+
+                // writeEnable      = 1'b0;
+                // mem_write_enable = 1'b0;
+                // changing_pc      = 1'b1;
+                // updated_next     = pc + 64'd8;
+
+                // result           = r_out;
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
@@ -104,7 +102,8 @@ module ALU(
             end
 
             default: begin
-                // writeEnable and mem_write_enable already defaulted above
+                writeEnable      = 1'b0;
+                mem_write_enable = 1'b0;
             end
         endcase
     end
@@ -263,6 +262,19 @@ module tinker_core(
         (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
     );
 
+    // ◄◄ NEW ►► flush as soon as a branch/jump returns from EX/MEM
+    wire flushFetch = EX_MEM_changePC;
+    // ◄◄ NEW ►► combine load-use & multi-cycle stalls
+    wire fetchStall = load_use_hazard || (stall_cnt != 0);
+
+    // ◄◄ NEW ►► compute bubble values for IF/ID
+    wire [31:0] next_IF_ID_IR = flushFetch   ? 32'd0 :
+                                fetchStall   ? 32'd0 :
+                                               inst;
+    wire [63:0] next_IF_ID_PC = flushFetch   ? 64'd0 :
+                                fetchStall   ? 64'd0 :
+                                               PC;
+
     // ID/EX Pipeline Registers
     reg [63:0] ID_EX_PC;
     reg [4:0]  ID_EX_ctrl, ID_EX_rd, ID_EX_rs, ID_EX_rt;
@@ -286,7 +298,7 @@ module tinker_core(
     // Memory
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    memory memory(
+    memory memory (
         .pc               (PC),
         .clk              (clk),
         .reset            (reset),
@@ -335,8 +347,12 @@ module tinker_core(
     wire [63:0] forwarded_rdVal = forwardRD_EX ? EX_MEM_ALU :
                                  (forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_rdVal);
 
-    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011) ? forwarded_rdVal : forwarded_A;
-    wire [63:0] aluOp2 = ID_EX_rtPassed ? forwarded_B : {{52{ID_EX_L[11]}}, ID_EX_L};
+    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
+                        ? forwarded_rdVal
+                        : forwarded_A;
+    wire [63:0] aluOp2 = ID_EX_rtPassed
+                        ? forwarded_B
+                        : {{52{ID_EX_L[11]}}, ID_EX_L};
 
     // ALU instance
     wire [63:0] aluResult, aluUpdatedNext;
@@ -365,55 +381,40 @@ module tinker_core(
     initial cycle_count = 0;
 
     always @(posedge clk or posedge reset) begin
-
         if (reset) begin
             PC        <= 64'h2000;
             stall_cnt <= 0;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
-        end
-        else if (stall_cnt != 0) begin
-            // continuing an earlier multi-cycle stall
-            stall_cnt <= stall_cnt - 1;
-            // hold PC steady, bubble IF/ID
-            IF_ID_PC  <= 0;
-            IF_ID_IR  <= 32'h00000000;
-        end
-        else if (load_use_hazard) begin
-            // load-use hazard: stall exactly one cycle
-            stall_cnt <= 1;              // schedule one more bubble
-            IF_ID_PC  <= 0;              
-            IF_ID_IR  <= 32'h00000000;   
-            // PC is held automatically because stall_cnt!=0 next cycle
-        end
-        else if (EX_MEM_changePC) begin
-            // any branch/jump/call/return redirect
-            PC        <= EX_MEM_target;  // new PC from the ALU
-            IF_ID_PC  <= 0;              // flush
-            IF_ID_IR  <= 0;
-        end
-        else begin
-            // normal sequential fetch
-            PC        <= PC + 4;
-            IF_ID_PC  <= PC;
-            IF_ID_IR  <= inst;
-        end
+        end else begin
+            // 1) PC update: on a flush go to target, else advance when not stalled
+            if (flushFetch)
+                PC <= EX_MEM_target;
+            else if (!fetchStall)
+                PC <= PC + 4;
 
-        // Cycle counter & debug print
-        cycle_count <= cycle_count + 1;
-        if (cycle_count <= 15) begin
-            $display("CYCLE %0d --------------------------------", cycle_count);
-            $display("  PC               = 0x%016h", PC);
-            $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
-            $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h", ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
-            $display("  EX_MEM.changePC=%b updated_next=0x%016h", EX_MEM_changePC, EX_MEM_target);
-            $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
-            $display("  MEM_WB.rd=%0d wb=0x%016h", MEM_WB_rd, MEM_WB_ALU);
-            $display("");
+            // 2) IF/ID update: bubble on flush or stall
+            IF_ID_PC <= next_IF_ID_PC;
+            IF_ID_IR <= next_IF_ID_IR;
+
+            // 3) cycle counter & debug prints (unchanged)
+            cycle_count <= cycle_count + 1;
+            if (cycle_count <= 15) begin
+                $display("CYCLE %0d --------------------------------", cycle_count);
+                $display("  PC               = 0x%016h", PC);
+                $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
+                $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h",
+                         ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
+                $display("  EX_MEM.changePC=%b updated_next=0x%016h",
+                         EX_MEM_changePC, EX_MEM_target);
+                $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
+                $display("  MEM_WB.rd=%0d wb=0x%016h", MEM_WB_rd, MEM_WB_ALU);
+                $display("");
+            end
         end
     end
 
-    // ID/EX register update
+    // ID/EX register update (unchanged)
     always @(posedge clk or posedge reset) begin
         if (reset || EX_MEM_changePC || stall_cnt != 0) begin
             ID_EX_ctrl     <= 0;
@@ -442,7 +443,7 @@ module tinker_core(
         end
     end
 
-    // EX/MEM register update
+    // EX/MEM register update (unchanged)
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -469,7 +470,7 @@ module tinker_core(
         end
     end
 
-    // MEM/WB register update
+    // MEM/WB register update (unchanged)
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
@@ -488,7 +489,7 @@ module tinker_core(
         end
     end
 
-    // Halt logic
+    // Halt logic (unchanged)
     reg halt_flag;
     always @(posedge clk or posedge reset) begin
         if (reset)
