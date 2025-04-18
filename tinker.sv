@@ -189,7 +189,7 @@ endmodule
 
 
 // ================================================================
-// tinker_core – identical logic, concise signal names
+// tinker_core — now with EX and MEM forwarding
 // ================================================================
 module tinker_core (
     input  wire clk,
@@ -197,40 +197,51 @@ module tinker_core (
     output wire hlt
 );
 
-/* 0. pc & fetch -------------------------------------------------*/
+/* ----------------------------------------------------------------
+   0. pc & fetch
+-----------------------------------------------------------------*/
 reg  [63:0] pc_reg;
 wire [63:0] pc_plus4 = pc_reg + 64'd4;
 
-/* flush / stall */
-wire stall_if;                   // raw hazard
-wire flush_if  = alu_br;         // branch resolved in ex
+/* branch flush  */
+wire flush_if  = ex_mem_br;   // branch/jump/return resolved in EX
 
-/* 1. if / id ----------------------------------------------------*/
+/* ----------------------------------------------------------------
+   1. IF / ID
+-----------------------------------------------------------------*/
 reg [31:0] if_id_ir;
 reg [63:0] if_id_pc4;
 
-/* 2. id / ex ----------------------------------------------------*/
+/* ----------------------------------------------------------------
+   2. ID / EX
+-----------------------------------------------------------------*/
 reg [4:0]  id_ex_op, id_ex_rd, id_ex_rs, id_ex_rt;
 reg [63:0] id_ex_a,  id_ex_b,  id_ex_c;
 reg [63:0] id_ex_imm, id_ex_pc4, id_ex_sp;
 
-/* 3. ex / mem ---------------------------------------------------*/
-reg [4:0]  ex_mem_rd;
+/* ----------------------------------------------------------------
+   3. EX / MEM
+-----------------------------------------------------------------*/
+reg [4:0]  ex_mem_op, ex_mem_rd;
 reg [63:0] ex_mem_res, ex_mem_addr, ex_mem_npc;
 reg        ex_mem_br, ex_mem_we_reg, ex_mem_we_mem, ex_mem_hlt;
 
-/* 4. mem / wb ---------------------------------------------------*/
+/* ----------------------------------------------------------------
+   4. MEM / WB
+-----------------------------------------------------------------*/
 reg [4:0]  mem_wb_rd;
 reg [63:0] mem_wb_res;
 reg        mem_wb_we_reg, mem_wb_hlt;
 
 assign hlt = mem_wb_hlt;
 
-/* 5. memory -----------------------------------------------------*/
+/* ----------------------------------------------------------------
+   5. unified memory
+-----------------------------------------------------------------*/
 wire [31:0] instr_fetch;
 wire [63:0] mem_rdata;
 
-memory memory (
+memory mem_blk (
     .clk(clk),
     .pc_in(pc_reg),
     .addr_in(alu_addr),
@@ -240,9 +251,10 @@ memory memory (
     .data_out(mem_rdata)
 );
 
-/* 6. decode -----------------------------------------------------*/
-wire [4:0] dec_op, dec_rd, dec_rs, dec_rt;
-wire [11:0] dec_l;
+/* ----------------------------------------------------------------
+   6. decode
+-----------------------------------------------------------------*/
+wire [4:0] dec_op, dec_rd, dec_rs, dec_rt;  wire [11:0] dec_l;
 
 decoder dec_unit (
     .instr(if_id_ir),
@@ -251,10 +263,10 @@ decoder dec_unit (
 
 wire [63:0] imm_ext = {{52{dec_l[11]}}, dec_l};
 
-/* register file */
+/* register file ------------------------------------------------*/
 wire [63:0] reg_a, reg_b, reg_c, sp_reg;
 
-register_file reg_file (
+register_file rf (
     .clk(clk), .reset(reset),
     .we(mem_wb_we_reg),
     .data_in(mem_wb_res),
@@ -263,26 +275,20 @@ register_file reg_file (
     .rd1(reg_a), .rd2(reg_b), .rd3(reg_c), .sp_val(sp_reg)
 );
 
-/* 7. raw hazard detect -----------------------------------------*/
-wire id_ex_we_reg = (id_ex_op != 5'h1f) &&
-                    (id_ex_op != 5'h08) && (id_ex_op != 5'h09) &&
-                    (id_ex_op != 5'h0a) && (id_ex_op != 5'h0b) &&
-                    (id_ex_op != 5'h0c) && (id_ex_op != 5'h0d) &&
-                    (id_ex_op != 5'h0e) && (id_ex_op != 5'h0f) &&
-                    (id_ex_op != 5'h13);
+/* ----------------------------------------------------------------
+   7. hazard detection — **stall only for load‑use**
+-----------------------------------------------------------------*/
+wire load_use_hazard = (ex_mem_op == 5'h10) &&      // EX/MEM is a LOAD
+                       (ex_mem_rd != 0) &&
+                       ( (ex_mem_rd == dec_rs) ||
+                         (ex_mem_rd == dec_rt) ||
+                         (ex_mem_rd == dec_rd) );
 
-wire hazard_id_ex = id_ex_we_reg &&
-                    ((id_ex_rd == dec_rs) || (id_ex_rd == dec_rt) || (id_ex_rd == dec_rd));
+wire stall_if = load_use_hazard;
 
-wire hazard_ex  = ex_mem_we_reg &&
-                  ((ex_mem_rd == dec_rs) || (ex_mem_rd == dec_rt) || (ex_mem_rd == dec_rd));
-
-wire hazard_mem = mem_wb_we_reg &&
-                  ((mem_wb_rd == dec_rs) || (mem_wb_rd == dec_rt) || (mem_wb_rd == dec_rd));
-
-assign stall_if = hazard_id_ex | hazard_ex | hazard_mem;
-
-/* 8. next‑state for if/id & id/ex -------------------------------*/
+/* ----------------------------------------------------------------
+   8. pipeline register write‑ins
+-----------------------------------------------------------------*/
 wire [31:0] nxt_if_ir  = flush_if ? 32'd0 : (stall_if ? if_id_ir  : instr_fetch);
 wire [63:0] nxt_if_pc4 = flush_if ? 64'd0 : (stall_if ? if_id_pc4 : pc_plus4);
 
@@ -301,13 +307,36 @@ wire [63:0] nxt_imm  = bubble ? 64'd0 : imm_ext;
 wire [63:0] nxt_pc4  = bubble ? 64'd0 : if_id_pc4;
 wire [63:0] nxt_sp   = bubble ? 64'd0 : sp_reg;
 
-/* 9. execute ----------------------------------------------------*/
+/* ----------------------------------------------------------------
+   9. forwarding logic  (EX→EX  &  MEM→EX)
+-----------------------------------------------------------------*/
+wire fwd_a_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rs);
+wire fwd_a_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rs);
+
+wire fwd_b_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rt);
+wire fwd_b_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rt);
+
+wire fwd_c_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rd);
+wire fwd_c_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rd);
+
+wire [63:0] src_a_mux = fwd_a_ex  ? ex_mem_res :
+                        fwd_a_mem ? mem_wb_res : id_ex_a;
+
+wire [63:0] src_b_mux = fwd_b_ex  ? ex_mem_res :
+                        fwd_b_mem ? mem_wb_res : id_ex_b;
+
+wire [63:0] src_c_mux = fwd_c_ex  ? ex_mem_res :
+                        fwd_c_mem ? mem_wb_res : id_ex_c;
+
+/* ----------------------------------------------------------------
+   10. execute stage (ALU)
+-----------------------------------------------------------------*/
 wire [63:0] alu_out, alu_addr, alu_npc;
-wire        alu_br, alu_we_reg, alu_we_mem, alu_hlt;
+wire        alu_br,  alu_we_reg, alu_we_mem, alu_hlt;
 
 alu alu_inst (
     .op(id_ex_op),
-    .src_a(id_ex_a), .src_b(id_ex_b), .src_c(id_ex_c),
+    .src_a(src_a_mux), .src_b(src_b_mux), .src_c(src_c_mux),
     .imm_ext(id_ex_imm),
     .pc_in(id_ex_pc4 - 64'd4),
     .sp_in(id_ex_sp),
@@ -320,7 +349,10 @@ alu alu_inst (
     .halt_flag(alu_hlt)
 );
 
-/* ex/mem next ---------------------------------------------------*/
+/* ----------------------------------------------------------------
+   11. build next EX/MEM & MEM/WB values
+-----------------------------------------------------------------*/
+wire [4:0]  nxt_ex_mem_op   = id_ex_op;
 wire [4:0]  nxt_ex_mem_rd   = id_ex_rd;
 wire [63:0] nxt_ex_mem_res  = alu_out;
 wire [63:0] nxt_ex_mem_addr = alu_addr;
@@ -330,45 +362,40 @@ wire        nxt_ex_mem_we_r = alu_we_reg;
 wire        nxt_ex_mem_we_m = alu_we_mem;
 wire        nxt_ex_mem_hlt  = alu_hlt;
 
-/* mem/wb next ---------------------------------------------------*/
 wire [4:0]  nxt_mem_wb_rd   = ex_mem_rd;
 wire [63:0] nxt_mem_wb_res  = ex_mem_res;
 wire        nxt_mem_wb_we_r = ex_mem_we_reg;
 wire        nxt_mem_wb_hlt  = ex_mem_hlt;
 
-/* 11. sequential logic -----------------------------------------*/
+/* ----------------------------------------------------------------
+   12. sequential logic
+-----------------------------------------------------------------*/
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        /* pc */
         pc_reg <= 64'h2000;
 
-        /* if/id */
-        if_id_ir  <= 32'd0;
-        if_id_pc4 <= 64'd0;
+        if_id_ir  <= 32'd0;  if_id_pc4 <= 64'd0;
 
-        /* id/ex */
-        id_ex_op   <= BUBBLE_OP; id_ex_rd <= 0;
-        id_ex_rs   <= 0; id_ex_rt <= 0;
-        id_ex_a    <= 0; id_ex_b <= 0; id_ex_c <= 0;
-        id_ex_imm  <= 0; id_ex_pc4 <= 0; id_ex_sp <= 0;
+        id_ex_op  <= BUBBLE_OP; id_ex_rd <= 0; id_ex_rs <= 0; id_ex_rt <= 0;
+        id_ex_a   <= 0; id_ex_b <= 0; id_ex_c <= 0;
+        id_ex_imm <= 0; id_ex_pc4 <= 0; id_ex_sp <= 0;
 
-        /* ex/mem */
-        ex_mem_rd <= 0; ex_mem_res <= 0; ex_mem_addr <= 0; ex_mem_npc <= 0;
-        ex_mem_br <= 0; ex_mem_we_reg <= 0; ex_mem_we_mem <= 0; ex_mem_hlt <= 0;
+        ex_mem_op <= 0; ex_mem_rd <= 0; ex_mem_res <= 0; ex_mem_addr <= 0;
+        ex_mem_npc <= 0; ex_mem_br <= 0; ex_mem_we_reg <= 0;
+        ex_mem_we_mem <= 0; ex_mem_hlt <= 0;
 
-        /* mem/wb */
         mem_wb_rd <= 0; mem_wb_res <= 0; mem_wb_we_reg <= 0; mem_wb_hlt <= 0;
 
     end else begin
-        /* pc update */
+        /* pc */
         if (flush_if)        pc_reg <= alu_npc;
         else if (!stall_if)  pc_reg <= pc_plus4;
 
-        /* if/id */
+        /* IF/ID */
         if_id_ir  <= nxt_if_ir;
         if_id_pc4 <= nxt_if_pc4;
 
-        /* id/ex */
+        /* ID/EX */
         id_ex_op   <= nxt_op;
         id_ex_rd   <= nxt_rd;
         id_ex_rs   <= nxt_rs;
@@ -380,7 +407,8 @@ always @(posedge clk or posedge reset) begin
         id_ex_pc4  <= nxt_pc4;
         id_ex_sp   <= nxt_sp;
 
-        /* ex/mem */
+        /* EX/MEM */
+        ex_mem_op       <= nxt_ex_mem_op;
         ex_mem_rd       <= nxt_ex_mem_rd;
         ex_mem_res      <= nxt_ex_mem_res;
         ex_mem_addr     <= nxt_ex_mem_addr;
@@ -390,7 +418,7 @@ always @(posedge clk or posedge reset) begin
         ex_mem_we_mem   <= nxt_ex_mem_we_m;
         ex_mem_hlt      <= nxt_ex_mem_hlt;
 
-        /* mem/wb */
+        /* MEM/WB */
         mem_wb_rd      <= nxt_mem_wb_rd;
         mem_wb_res     <= nxt_mem_wb_res;
         mem_wb_we_reg  <= nxt_mem_wb_we_r;
