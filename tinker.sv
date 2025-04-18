@@ -826,10 +826,12 @@ module tinker_core(
 
     // ALU operand 1 (Rs)
     wire [63:0] forwarded_A = 
-        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs) ? EX_MEM_ALU :
         (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs) ?
             (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs) ?
+            EX_MEM_ALU :
         ID_EX_A;
+
 
     // ALU operand 2 (Rt)
     wire [63:0] forwarded_B = 
