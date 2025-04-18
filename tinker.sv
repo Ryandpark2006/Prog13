@@ -81,7 +81,6 @@ module ALU(
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
 
-            // **Return**: skip exactly one instruction
             5'b01101: begin  // return
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b0;
@@ -597,28 +596,46 @@ module tinker_core(
     // --------------------------------------------------
     // Forwarding logic (EX→EX then MEM→EX)
     // --------------------------------------------------
-    wire [63:0] ex_forward_A = 
-        (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
-        ? EX_MEM_ALU : ID_EX_A;
-    wire [63:0] mem_forward_A =
-        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
-        ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-        : ex_forward_A;
+    // wire [63:0] ex_forward_A = 
+    //     (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
+    //     ? EX_MEM_ALU : ID_EX_A;
+    // wire [63:0] mem_forward_A =
+    //     (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
+    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+    //     : ex_forward_A;
+    // wire [63:0] aluOp1 = 
+    //     (ID_EX_ctrl==5'b11001 || ID_EX_ctrl==5'b11011)
+    //     ? ID_EX_rdVal : mem_forward_A;
+
+    // wire [63:0] ex_forward_B = 
+    //     (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt && ID_EX_rtPassed)
+    //     ? EX_MEM_ALU : ID_EX_B;
+    // wire [63:0] mem_forward_B =
+    //     (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt && ID_EX_rtPassed)
+    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+    //     : ex_forward_B;
+    // wire [63:0] aluOp2 =
+    //     ID_EX_rtPassed 
+    //     ? mem_forward_B 
+    //     : {{52{ID_EX_L[11]}}, ID_EX_L};
     wire [63:0] aluOp1 = 
         (ID_EX_ctrl==5'b11001 || ID_EX_ctrl==5'b11011)
-        ? ID_EX_rdVal : mem_forward_A;
-
-    wire [63:0] ex_forward_B = 
-        (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt && ID_EX_rtPassed)
-        ? EX_MEM_ALU : ID_EX_B;
-    wire [63:0] mem_forward_B =
-        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt && ID_EX_rtPassed)
+        ? ID_EX_rdVal : 
+        (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
+        ? EX_MEM_ALU :
+        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
         ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-        : ex_forward_B;
+        : ID_EX_A;
+
     wire [63:0] aluOp2 =
         ID_EX_rtPassed 
-        ? mem_forward_B 
+        ? ((EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt)
+        ? EX_MEM_ALU :
+        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt)
+        ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+        : ID_EX_B)
         : {{52{ID_EX_L[11]}}, ID_EX_L};
+
 
 
     // --------------------------------------------------
@@ -722,10 +739,14 @@ module tinker_core(
         end else begin
             EX_MEM_ctrl     <= ID_EX_ctrl;
             // **Override write‐back reg for RETURN→R31**
-            if (ID_EX_ctrl == 5'b01101)  
-                EX_MEM_rd   <= 5'd31;
-            else
-                EX_MEM_rd   <= ID_EX_rd;
+            if (ID_EX_ctrl == 5'b01101) begin
+            // For return instruction, update r31 with r31-8
+                EX_MEM_rd <= 5'd31;
+                EX_MEM_ALU <= ID_EX_r31 - 8;
+            end else begin
+                EX_MEM_rd <= ID_EX_rd;
+            end
+
             EX_MEM_ALU      <= aluResult;
             EX_MEM_B        <= ID_EX_B;
             EX_MEM_memWrite <= aluMemWrite;
