@@ -209,7 +209,7 @@ wire [63:0] PC_plus8 = PC + 64'd8;    // advance by two 32‑bit words
 /* unified I‑/D‑memory: dual‑word fetch, single data‑port --------------- */
 wire [31:0] IF_instr0 , IF_instr1 ;
 wire [63:0] dmem_rdata;
-memory64 MEM (
+memory memory (
     .clk(clk),
     .pc(PC),
     .dataAddress(EX_MEM_addr),        // address from LSU (slot‑0 only)
@@ -251,7 +251,7 @@ wire [63:0] IF_PC_n  = flush ? EX_MEM_PCtarget :
 
 /* ───────────────────────────── 2. Register read ─────────────────────── */
 wire [63:0] regA, regB, regC, regSP;
-register_file RF (
+register_file reg_file (
     .clk(clk), .reset(reset),
     .write     (MEM_WB_regW),
     .data_input(MEM_WB_val),
