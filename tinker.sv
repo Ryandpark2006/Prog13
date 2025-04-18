@@ -206,7 +206,7 @@ wire [63:0] PC_plus8 = PC + 64'd8;
 /* IMEM / DMEM */
 wire [31:0] IF_instr0 , IF_instr1 ;
 wire [63:0] dmem_rdata;
-memory64 memory (
+memory memory (
     .clk(clk),
     .pc(PC),
     .dataAddress(EX_MEM_addr),         // LSU uses EX/MEM
