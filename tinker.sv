@@ -137,11 +137,20 @@ module instruction_decoder(
     assign rs            = instruction[21:17];
     assign rt            = instruction[16:12];
     assign L             = instruction[11:0];
-    assign rtPassed      = (controlSignal == 5'b11001 || controlSignal == 5'b11011 ||
-                            controlSignal == 5'b00101 || controlSignal == 5'b00111 ||
-                            controlSignal == 5'b10010 || controlSignal == 5'b01010 ||
-                            controlSignal == 5'b10011 || controlSignal == 5'b10000)
-                           ? 0 : 1;
+    assign rtPassed = !(controlSignal == 5'b11001 ||  // addi
+                    controlSignal == 5'b11011 ||  // subi
+                    controlSignal == 5'b00101 ||  // shftri
+                    controlSignal == 5'b00111 ||  // shftli
+                    controlSignal == 5'b10010 ||  // mov_L_to_reg
+                    controlSignal == 5'b01010 ||  // brr
+                    controlSignal == 5'b10011 ||  // store
+                    controlSignal == 5'b10000);   // load
+
+    // assign rtPassed      = (controlSignal == 5'b11001 || controlSignal == 5'b11011 ||
+    //                         controlSignal == 5'b00101 || controlSignal == 5'b00111 ||
+    //                         controlSignal == 5'b10010 || controlSignal == 5'b01010 ||
+    //                         controlSignal == 5'b10011 || controlSignal == 5'b10000)
+    //                        ? 0 : 1;
 endmodule
 
 module memory(
