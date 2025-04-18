@@ -370,30 +370,6 @@ module tinker_core(
         .changing_pc   (aluChangePC)
     );
 
-    // ==================================================================
-    // IF stage: 2-cycle stall, then branch flush
-    // ==================================================================
-    // always @(posedge clk or posedge reset) begin
-    //     if (reset) begin
-    //         PC        <= 64'h2000;
-    //         stall_cnt <= 2;
-    //         IF_ID_PC  <= 0;
-    //         IF_ID_IR  <= 0;
-    //     end else if (stall_cnt != 0) begin
-    //         stall_cnt <= stall_cnt - 1;
-    //         IF_ID_PC  <= 0;
-    //         IF_ID_IR  <= 32'b0;
-    //     end else if (EX_MEM_changePC) begin
-    //         PC        <= EX_MEM_target;
-    //         IF_ID_PC  <= 0;
-    //         IF_ID_IR  <= 32'b0;
-    //     end else begin
-    //         PC        <= PC + 4;
-    //         IF_ID_PC  <= PC;
-    //         IF_ID_IR  <= inst;
-    //     end
-    // end
-
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC <= 64'h2000;
