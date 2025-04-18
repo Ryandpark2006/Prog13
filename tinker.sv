@@ -188,6 +188,7 @@ module register_file(
     input  wire [63:0] dataInput,
     input  wire [4:0]  readAddress1,
     input  wire [4:0]  readAddress2,
+    input  wire [4:0]  readAddress3,  // <-- NEW: for rdVal
     input  wire [4:0]  writeAddress,
     input  wire        lPassed,
     input  wire [11:0] L,
@@ -197,10 +198,12 @@ module register_file(
     output wire [63:0] r31_val
 );
     reg [63:0] registers [31:0];
+
     assign value1 = registers[readAddress1];
     assign value2 = lPassed ? {{52{L[11]}},L} : registers[readAddress2];
-    assign rdVal  = registers[writeAddress];
+    assign rdVal  = registers[readAddress3];  // <-- Use rd, not writeAddress
     assign r31_val= registers[31];
+
     integer j;
     always @(posedge clk) begin
         if (reset) begin
@@ -212,6 +215,39 @@ module register_file(
         end
     end
 endmodule
+
+
+// module register_file(
+//     input  wire        clk,
+//     input  wire        reset,
+//     input  wire        write_enable,
+//     input  wire [63:0] dataInput,
+//     input  wire [4:0]  readAddress1,
+//     input  wire [4:0]  readAddress2,
+//     input  wire [4:0]  writeAddress,
+//     input  wire        lPassed,
+//     input  wire [11:0] L,
+//     output wire [63:0] value1,
+//     output wire [63:0] value2,
+//     output wire [63:0] rdVal,
+//     output wire [63:0] r31_val
+// );
+//     reg [63:0] registers [31:0];
+//     assign value1 = registers[readAddress1];
+//     assign value2 = lPassed ? {{52{L[11]}},L} : registers[readAddress2];
+//     assign rdVal  = registers[writeAddress];
+//     assign r31_val= registers[31];
+//     integer j;
+//     always @(posedge clk) begin
+//         if (reset) begin
+//             for (j = 0; j < 31; j = j + 1)
+//                 registers[j] <= 64'b0;
+//             registers[31] <= 64'h80000;
+//         end else if (write_enable) begin
+//             registers[writeAddress] <= dataInput;
+//         end
+//     end
+// endmodule
 
 module tinker_core(
     input  wire        clk,
@@ -234,6 +270,10 @@ module tinker_core(
         .rt           (IF_rt),
         .L            (IF_L),
         .rtPassed     (IF_rtPassed)
+    );
+    wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (
+    (IF_ctrl != 5'b0 && EX_MEM_rd == IF_rs) || 
+    (IF_ctrl != 5'b0 && EX_MEM_rd == IF_rt && IF_rtPassed)
     );
 
     reg [63:0] ID_EX_PC;
@@ -284,6 +324,7 @@ module tinker_core(
         .dataInput   (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
         .readAddress1(IF_rs),
         .readAddress2(IF_rt),
+        .readAddress3(IF_rd),          // <-- NEW
         .writeAddress(MEM_WB_rd),
         .lPassed     (~IF_rtPassed),    // invert: 1 means literal, 0 means register
         .L           (IF_L),
@@ -334,24 +375,30 @@ module tinker_core(
     // ==================================================================
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            PC        <= 64'h2000;
-            stall_cnt <= 2;
-            IF_ID_PC  <= 0;
-            IF_ID_IR  <= 0;
+            PC <= 64'h2000;
+            stall_cnt <= 5;
+            IF_ID_PC <= 0;
+            IF_ID_IR <= 0;
         end else if (stall_cnt != 0) begin
             stall_cnt <= stall_cnt - 1;
-            IF_ID_PC  <= 0;
-            IF_ID_IR  <= 32'b0;
+            IF_ID_PC <= 0;
+            IF_ID_IR <= 0;
         end else if (EX_MEM_changePC) begin
-            PC        <= EX_MEM_target;
-            IF_ID_PC  <= 0;
-            IF_ID_IR  <= 32'b0;
+            PC <= EX_MEM_target;
+            IF_ID_PC <= 0;
+            IF_ID_IR <= 0;
+        end else if (load_use_hazard) begin
+            // Stall pipeline: hold PC and clear IF_ID stage
+            PC <= PC;
+            IF_ID_PC <= 0;
+            IF_ID_IR <= 32'h00000000;  // Insert NOP
         end else begin
-            PC        <= PC + 4;
-            IF_ID_PC  <= PC;
-            IF_ID_IR  <= inst;
+            PC <= PC + 4;
+            IF_ID_PC <= PC;
+            IF_ID_IR <= inst;
         end
     end
+
 
     // ==================================================================
     // ID stage: flush on branch or during stall
