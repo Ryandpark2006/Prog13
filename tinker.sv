@@ -80,7 +80,7 @@ module ALU(
                 mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
                 rw_addr          = r31_val - 8;
-                updated_next     = r_out;  // ← must be available immediately
+                updated_next     = 64'd0;  // DEFER THIS
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
@@ -437,7 +437,7 @@ module tinker_core(
             EX_MEM_addr     <= aluAddr;
             EX_MEM_wrData   <= aluWrData;
             EX_MEM_changePC <= aluChangePC;
-            EX_MEM_target   <= aluUpdatedNext;
+            EX_MEM_target <= (EX_MEM_ctrl == 5'b01101) ? mem_rdata : aluUpdatedNext;
         end
     end
 
