@@ -391,7 +391,7 @@ module tinker_core(
             IF_ID_PC  <= 0;              // flush
             IF_ID_IR  <= 0;
         end
-        else if(opcode == 5'b01001) begin
+        else if(IF_ctrl == 5'b01001) begin
             // branch instruction
             PC        <= PC + 4 + {{52{IF_L[11]}}, IF_L};
             IF_ID_PC  <= 0;              // flush
