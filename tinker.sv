@@ -111,7 +111,7 @@ module alu(
 endmodule
 
 
-module registers(
+module register_file(
     input        clk,
     input        reset,
     input        write,
@@ -239,7 +239,7 @@ reg         MEM_WB_regW , MEM_WB_hlt;
 wire [31:0] instr_mem_out;
 wire [63:0] data_mem_out;
 
-memory MEM (
+memory memory (
     .clk            (clk),
     .programCounter (PC),
     .dataAddress    (EX_MEM_addr),
@@ -253,7 +253,7 @@ wire [4:0] op, rd, rs, rt;  wire [11:0] L;
 decoder DEC (.instruction(IF_ID_IR), .opcode(op), .rd(rd), .rs(rs), .rt(rt), .l(L));
 
 wire [63:0] A_reg, B_reg, C_reg, SP_reg;
-registers REGS (
+register_file reg_file (
     .clk(clk), .reset(reset),
     .write(MEM_WB_regW),
     .data_input(MEM_WB_val),
