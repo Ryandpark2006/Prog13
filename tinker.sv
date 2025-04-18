@@ -188,185 +188,161 @@ module decoder(
     assign l      = instruction[11:0];
 endmodule
 
-
-/* ================================================================ *
- *  TINKER‑CORE  — refactored to “PC / IF_ID / ID_EX / EX_MEM” style *
- * ================================================================ */
+/* tinker‑core — refactored with pc / if_id / id_ex / ex_mem style */
 module tinker_core (
     input  wire clk,
     input  wire reset,
     output wire hlt
 );
 
-/* ───────────── 0. FETCH ───────────────────────────────────────── */
-reg  [63:0] PC;                      // program counter
-wire [63:0] PC_plus4 = PC + 64'd4;   // next sequential address
+/* 0. fetch */
+reg  [63:0] pc;
+wire [63:0] pc_plus4 = pc + 64'd4;
 
-/* ───────────── RAW‑hazard stall & branch flush flags ──────────── */
-wire stall_IF  ;   // set by hazard detector
-wire flush_IF  ;   // asserted as soon as the EX‑stage ALU redirects the PC
+/* hazard flags */
+wire stall_if;
+wire flush_if;
 
-/* ================================================================ *
- *  1. IF → ID  (pipeline register)                                 *
- * ================================================================ */
-reg  [31:0] IF_ID_IR;      // fetched instruction
-reg  [63:0] IF_ID_PC4;     // PC+4 accompanying that instruction
+/* 1. if→id */
+reg [31:0] if_id_ir;
+reg [63:0] if_id_pc4;
 
-/* ================================================================ *
- *  2. ID → EX  (pipeline register)                                 *
- * ================================================================ */
-reg  [4:0]  ID_EX_op  , ID_EX_rd , ID_EX_rs , ID_EX_rt;
-reg  [63:0] ID_EX_A   , ID_EX_B  , ID_EX_C;
-reg  [63:0] ID_EX_SExt, ID_EX_PC4, ID_EX_SP;
+/* 2. id→ex */
+reg [4:0]  id_ex_op , id_ex_rd , id_ex_rs , id_ex_rt;
+reg [63:0] id_ex_a  , id_ex_b  , id_ex_c;
+reg [63:0] id_ex_sext, id_ex_pc4, id_ex_sp;
 
-/* ================================================================ *
- *  3. EX → MEM (pipeline register)                                 *
- * ================================================================ */
-reg  [4:0]  EX_MEM_rd;
-reg  [63:0] EX_MEM_ALU   , EX_MEM_addr , EX_MEM_PCtarget;
-reg         EX_MEM_brTkn , EX_MEM_regW , EX_MEM_memW , EX_MEM_hlt;
+/* 3. ex→mem */
+reg [4:0]  ex_mem_rd;
+reg [63:0] ex_mem_alu , ex_mem_addr , ex_mem_pctarget;
+reg        ex_mem_br  , ex_mem_regw , ex_mem_memw , ex_mem_hlt;
 
-/* ================================================================ *
- *  4. MEM → WB (pipeline register)                                 *
- * ================================================================ */
-reg  [4:0]  MEM_WB_rd;
-reg  [63:0] MEM_WB_val;
-reg         MEM_WB_regW , MEM_WB_hlt;
+/* 4. mem→wb */
+reg [4:0]  mem_wb_rd;
+reg [63:0] mem_wb_val;
+reg        mem_wb_regw , mem_wb_hlt;
 
-/* ================================================================ *
- *  5. Combinational modules shared with the original design        *
- * ================================================================ */
-wire [31:0] instr_mem_out;
-wire [63:0] data_mem_out;
+/* memory */
+wire [31:0] imem_out;
+wire [63:0] dmem_out;
 
-memory memory (
-    .clk            (clk),
-    .programCounter (PC),
-    .dataAddress    (EX_MEM_addr),
-    .writeEnable    (EX_MEM_memW),
-    .writeData      (EX_MEM_ALU),
-    .readInstruction(instr_mem_out),
-    .readData       (data_mem_out)
+memory mem (
+    .clk(clk),
+    .programCounter(pc),
+    .dataAddress(ex_mem_addr),
+    .writeEnable(ex_mem_memw),
+    .writeData(ex_mem_alu),
+    .readInstruction(imem_out),
+    .readData(dmem_out)
 );
 
-wire [4:0] op, rd, rs, rt;  wire [11:0] L;
-decoder DEC (.instruction(IF_ID_IR), .opcode(op), .rd(rd), .rs(rs), .rt(rt), .l(L));
+/* decode */
+wire [4:0] op, rd, rs, rt;
+wire [11:0] lit;
+decoder dec (
+    .instruction(if_id_ir),
+    .opcode(op), .rd(rd), .rs(rs), .rt(rt), .l(lit)
+);
 
-wire [63:0] A_reg, B_reg, C_reg, SP_reg;
-register_file reg_file (
+/* register file */
+wire [63:0] reg_a, reg_b, reg_c, reg_sp;
+registers regs (
     .clk(clk), .reset(reset),
-    .write(MEM_WB_regW),
-    .data_input(MEM_WB_val),
+    .write(mem_wb_regw),
+    .data_input(mem_wb_val),
     .registerOne(rs), .registerTwo(rt), .registerThree(rd),
-    .writeAddress(MEM_WB_rd),
-    .data_outputOne(A_reg), .data_outputTwo(B_reg),
-    .data_outputThree(C_reg), .stackPointer(SP_reg)
+    .writeAddress(mem_wb_rd),
+    .data_outputOne(reg_a), .data_outputTwo(reg_b),
+    .data_outputThree(reg_c), .stackPointer(reg_sp)
 );
 
-wire [63:0] SExt = {{52{L[11]}}, L};
+/* sign‑extend */
+wire [63:0] sext = {{52{lit[11]}}, lit};
 
-/* ───────────── Simple hazard detector (unchanged logic) ───────── */
-wire idex_write = (ID_EX_op != 5'h1F) && (ID_EX_op != 5'h08) && (ID_EX_op != 5'h09) &&
-                  (ID_EX_op != 5'h0a) && (ID_EX_op != 5'h0b) && (ID_EX_op != 5'h0c) &&
-                  (ID_EX_op != 5'h0d) && (ID_EX_op != 5'h0e) && (ID_EX_op != 5'h0f) &&
-                  (ID_EX_op != 5'h13);
+/* hazard detect */
+wire idex_regw = (id_ex_op != 5'h1f) && (id_ex_op < 5'h08 || id_ex_op > 5'h0f) && (id_ex_op != 5'h13);
+wire raw_idex = idex_regw   && ((id_ex_rd==rs)||(id_ex_rd==rt)||(id_ex_rd==rd));
+wire raw_ex   = ex_mem_regw && ((ex_mem_rd==rs)||(ex_mem_rd==rt)||(ex_mem_rd==rd));
+wire raw_mem  = mem_wb_regw && ((mem_wb_rd==rs)||(mem_wb_rd==rt)||(mem_wb_rd==rd));
+assign stall_if = raw_idex | raw_ex | raw_mem;
 
-wire RAW_IDEX = idex_write     && ((ID_EX_rd == rs)  || (ID_EX_rd == rt) || (ID_EX_rd == rd));
-wire RAW_EX   = EX_MEM_regW    && ((EX_MEM_rd == rs) || (EX_MEM_rd == rt) || (EX_MEM_rd == rd));
-wire RAW_MEM  = MEM_WB_regW    && ((MEM_WB_rd == rs) || (MEM_WB_rd == rt) || (MEM_WB_rd == rd));
+/* bubble mux */
+localparam [4:0] NOP = 5'h1f;
+wire bubble = stall_if | flush_if;
+wire [31:0] if_id_ir_n  = bubble ? 32'd0 : imem_out;
+wire [63:0] if_id_pc4_n = bubble ? 64'd0 : pc_plus4;
 
-assign stall_IF = RAW_IDEX | RAW_EX | RAW_MEM;
-
-/* ───────────── Bubble / flush muxes for IF→ID stage ───────────── */
-localparam [4:0] BUBBLE = 5'h1F;
-wire bubble = stall_IF | flush_IF;
-
-wire [31:0] IF_ID_IR_next = bubble ? 32'd0  : instr_mem_out;
-wire [63:0] IF_ID_PC4_next= bubble ? 64'd0  : PC_plus4;
-
-/* ───────────── ALU (identical to original) ────────────────────── */
-wire [63:0] alu_Y , alu_addr , alu_PCout;
-wire        alu_taken , alu_regW , alu_memW , alu_H;
-
-alu ALU (
-    .opcode(ID_EX_op),
-    .inputDataOne(ID_EX_A), .inputDataTwo(ID_EX_B),
-    .inputDataThree(ID_EX_C),
-    .signExtendedLiteral(ID_EX_SExt),
-    .programCounter(ID_EX_PC4 - 64'd4),
-    .stackPointer(ID_EX_SP),
-    .readMemory(data_mem_out),
-    .result(alu_Y), .readWriteAddress(alu_addr),
-    .newProgramCounter(alu_PCout),
+/* alu */
+wire [63:0] alu_y, alu_addr, alu_pc_out;
+wire        alu_taken, alu_regw, alu_memw, alu_hlt;
+alu alu_inst (
+    .opcode(id_ex_op),
+    .inputDataOne(id_ex_a), .inputDataTwo(id_ex_b), .inputDataThree(id_ex_c),
+    .signExtendedLiteral(id_ex_sext),
+    .programCounter(id_ex_pc4 - 64'd4),
+    .stackPointer(id_ex_sp),
+    .readMemory(dmem_out),
+    .result(alu_y), .readWriteAddress(alu_addr),
+    .newProgramCounter(alu_pc_out),
     .branchTaken(alu_taken),
-    .writeToRegister(alu_regW),
-    .writeToMemory(alu_memW),
-    .hlt(alu_H)
+    .writeToRegister(alu_regw),
+    .writeToMemory(alu_memw),
+    .hlt(alu_hlt)
 );
 
-assign flush_IF = alu_taken;   // flush as soon as branch resolved
+assign flush_if = alu_taken;
 
-/* ================================================================ *
- *  6.  SEQ LOGIC — clocked registers                               *
- * ================================================================ */
+/* sequential logic */
 always @(posedge clk or posedge reset) begin
-    /* ---------- RESET ---------- */
     if (reset) begin
-        PC           <= 64'h2000;
-
-        IF_ID_IR  <= 0; IF_ID_PC4 <= 0;
-
-        ID_EX_op  <= BUBBLE; ID_EX_rd <= 0; ID_EX_rs <= 0; ID_EX_rt <= 0;
-        ID_EX_A   <= 0; ID_EX_B <= 0; ID_EX_C <= 0;
-        ID_EX_SExt<= 0; ID_EX_PC4<= 0; ID_EX_SP <= 0;
-
-        EX_MEM_rd <= 0; EX_MEM_ALU <= 0; EX_MEM_addr <= 0; EX_MEM_PCtarget <= 0;
-        EX_MEM_brTkn <= 0; EX_MEM_regW <= 0; EX_MEM_memW <= 0; EX_MEM_hlt <= 0;
-
-        MEM_WB_rd <= 0; MEM_WB_val <= 0; MEM_WB_regW <= 0; MEM_WB_hlt <= 0;
-
+        pc <= 64'h2000;
+        if_id_ir <= 0; if_id_pc4 <= 0;
+        id_ex_op <= NOP; id_ex_rd<=0; id_ex_rs<=0; id_ex_rt<=0;
+        id_ex_a<=0; id_ex_b<=0; id_ex_c<=0; id_ex_sext<=0; id_ex_pc4<=0; id_ex_sp<=0;
+        ex_mem_rd<=0; ex_mem_alu<=0; ex_mem_addr<=0; ex_mem_pctarget<=0;
+        ex_mem_br<=0; ex_mem_regw<=0; ex_mem_memw<=0; ex_mem_hlt<=0;
+        mem_wb_rd<=0; mem_wb_val<=0; mem_wb_regw<=0; mem_wb_hlt<=0;
     end else begin
-        /* ---------- 0. PC update ---------- */
-        if (alu_taken)        PC <= alu_PCout;
-        else if (!stall_IF)   PC <= PC_plus4;
+        /* pc */
+        if (alu_taken)      pc <= alu_pc_out;
+        else if (!stall_if) pc <= pc_plus4;
 
-        /* ---------- 1. IF→ID ---------- */
-        IF_ID_IR  <= IF_ID_IR_next;
-        IF_ID_PC4 <= IF_ID_PC4_next;
+        /* if→id */
+        if_id_ir  <= if_id_ir_n;
+        if_id_pc4 <= if_id_pc4_n;
 
-        /* ---------- 2. ID→EX ---------- */
-        ID_EX_op   <= bubble ? BUBBLE : op;
-        ID_EX_rd   <= bubble ? 5'd0 : rd;
-        ID_EX_rs   <= bubble ? 5'd0 : rs;
-        ID_EX_rt   <= bubble ? 5'd0 : rt;
-        ID_EX_A    <= bubble ? 0 : A_reg;
-        ID_EX_B    <= bubble ? 0 : B_reg;
-        ID_EX_C    <= bubble ? 0 : C_reg;
-        ID_EX_SExt <= bubble ? 0 : SExt;
-        ID_EX_PC4  <= bubble ? 0 : IF_ID_PC4;
-        ID_EX_SP   <= bubble ? 0 : SP_reg;
+        /* id→ex */
+        id_ex_op   <= bubble ? NOP : op;
+        id_ex_rd   <= bubble ? 5'd0 : rd;
+        id_ex_rs   <= bubble ? 5'd0 : rs;
+        id_ex_rt   <= bubble ? 5'd0 : rt;
+        id_ex_a    <= bubble ? 0 : reg_a;
+        id_ex_b    <= bubble ? 0 : reg_b;
+        id_ex_c    <= bubble ? 0 : reg_c;
+        id_ex_sext <= bubble ? 0 : sext;
+        id_ex_pc4  <= bubble ? 0 : if_id_pc4;
+        id_ex_sp   <= bubble ? 0 : reg_sp;
 
-        /* ---------- 3. EX→MEM ---------- */
-        EX_MEM_rd      <= ID_EX_rd;
-        EX_MEM_ALU     <= alu_Y;
-        EX_MEM_addr    <= alu_addr;
-        EX_MEM_PCtarget<= alu_PCout;
-        EX_MEM_brTkn   <= alu_taken;
-        EX_MEM_regW    <= alu_regW;
-        EX_MEM_memW    <= alu_memW;
-        EX_MEM_hlt     <= alu_H;
+        /* ex→mem */
+        ex_mem_rd       <= id_ex_rd;
+        ex_mem_alu      <= alu_y;
+        ex_mem_addr     <= alu_addr;
+        ex_mem_pctarget <= alu_pc_out;
+        ex_mem_br       <= alu_taken;
+        ex_mem_regw     <= alu_regw;
+        ex_mem_memw     <= alu_memw;
+        ex_mem_hlt      <= alu_hlt;
 
-        /* ---------- 4. MEM→WB ---------- */
-        MEM_WB_rd    <= EX_MEM_rd;
-        MEM_WB_val   <= EX_MEM_ALU;
-        MEM_WB_regW  <= EX_MEM_regW;
-        MEM_WB_hlt   <= EX_MEM_hlt;
+        /* mem→wb */
+        mem_wb_rd   <= ex_mem_rd;
+        mem_wb_val  <= ex_mem_alu;
+        mem_wb_regw <= ex_mem_regw;
+        mem_wb_hlt  <= ex_mem_hlt;
     end
 end
 
-/* ================================================================ *
- *  7. HALT flag (unchanged)                                        *
- * ================================================================ */
-assign hlt = MEM_WB_hlt;
+/* halt */
+assign hlt = mem_wb_hlt;
 
 endmodule
+
