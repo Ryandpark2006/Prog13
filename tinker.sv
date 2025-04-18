@@ -162,7 +162,6 @@ endmodule
 module memory(
     input  wire [63:0] pc,
     input  wire        clk,
-    input  wire        reset,
     input  wire        mem_write_enable,
     input  wire [63:0] rw_val,
     input  wire [31:0] rw_addr,
@@ -171,16 +170,17 @@ module memory(
 );
     reg [7:0] bytes [524287:0];
 
+    // instruction fetch is still combinational
     assign instruction = {bytes[pc+3], bytes[pc+2], bytes[pc+1], bytes[pc]};
-    assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6], bytes[rw_addr+5], bytes[rw_addr+4],
-                          bytes[rw_addr+3], bytes[rw_addr+2], bytes[rw_addr+1], bytes[rw_addr]};
+    // data read is combinational too
+    assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6],
+                          bytes[rw_addr+5], bytes[rw_addr+4],
+                          bytes[rw_addr+3], bytes[rw_addr+2],
+                          bytes[rw_addr+1], bytes[rw_addr]};
 
-    integer i;
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            for (i = 0; i < 524288; i = i + 1)
-                bytes[i] <= 8'b0;
-        end else if (mem_write_enable) begin
+    // only write on clock, never clear on reset
+    always @(posedge clk) begin
+        if (mem_write_enable) begin
             bytes[rw_addr+7] <= rw_val[63:56];
             bytes[rw_addr+6] <= rw_val[55:48];
             bytes[rw_addr+5] <= rw_val[47:40];
@@ -192,6 +192,7 @@ module memory(
         end
     end
 endmodule
+
 
 module register_file(
     input  wire        clk,
