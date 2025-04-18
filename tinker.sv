@@ -193,8 +193,8 @@ module decoder(
 endmodule
 
 /* ======================================================================= *
- *  Tinker‑Core  ▸  2‑wide in‑order issue  ▸  full EX/MEM/WB forwarding    *
- *  (all single‑instruction tests pass after the fixes)                    *
+ *  Tinker‑Core  ▸  2‑wide in‑order issue                                  *
+ *  full EX/MEM/WB forwarding  +  WB‑stage HALT                            *
  * ======================================================================= */
 module tinker_core (
     input  wire clk,
@@ -202,194 +202,170 @@ module tinker_core (
     output wire hlt
 );
 
-/* ───────────────────────────── 0. Fetch ─────────────────────────────── */
-reg  [63:0] PC;                       // always 8‑byte aligned
-wire [63:0] PC_plus8 = PC + 64'd8;    // advance by two 32‑bit words
+/* ─────  0. Program‑Counter & Dual‑Fetch  ───────────────────────────── */
+reg  [63:0] PC;                       // 8‑byte aligned
+wire [63:0] PC_plus8 = PC + 64'd8;
 
-/* unified I‑/D‑memory: dual‑word fetch, single data‑port --------------- */
+/* unified I‑/D‑memory (dual‑word fetch) */
 wire [31:0] IF_instr0 , IF_instr1 ;
 wire [63:0] dmem_rdata;
-memory memory (
+memory64 MEM (
     .clk(clk),
     .pc(PC),
-    .dataAddress(EX_MEM_addr),        // address from LSU (slot‑0 only)
+    .dataAddress(EX_MEM_addr),
     .writeEnable(EX_MEM_memW),
     .writeData(EX_MEM_ALU),
     .instr0(IF_instr0), .instr1(IF_instr1),
     .readData(dmem_rdata)
 );
 
-/* ───────────────────────────── 1. IF → ID ───────────────────────────── */
+/* ─────  1. IF → ID  ────────────────────────────────────────────────── */
 reg  [31:0] IF_ID_IR [1:0];
 reg  [63:0] IF_ID_PC;
 
-/* branch‑flush & RAW‑stall flags */
-wire flush = EX_MEM_brTkn;            // resolved branch
+wire flush = EX_MEM_brTkn;            // branch resolved in MEM
 wire stall;                           // RAW hazard (slot‑0)
 
-/* decode wires for slot‑0/1 ------------------------------------------- */
+/* decode slot‑0 / slot‑1 */
 wire [4:0] op0, rd0, rs0, rt0;  wire [11:0] L0;
 wire [4:0] op1, rd1, rs1, rt1;  wire [11:0] L1;
-decoder DEC0 (.instruction(IF_ID_IR[0]), .opcode(op0), .rd(rd0),
-              .rs(rs0), .rt(rt0), .l(L0));
-decoder DEC1 (.instruction(IF_ID_IR[1]), .opcode(op1), .rd(rd1),
-              .rs(rs1), .rt(rt1), .l(L1));
+decoder D0(.instruction(IF_ID_IR[0]), .opcode(op0), .rd(rd0),
+           .rs(rs0), .rt(rt0), .l(L0));
+decoder D1(.instruction(IF_ID_IR[1]), .opcode(op1), .rd(rd1),
+           .rs(rs1), .rt(rt1), .l(L1));
 
-/* slot‑1 intra‑bundle dependence on slot‑0 ---------------------------- */
-wire dep10 = (rd0 != 5'd0) &&
-             ((rd0 == rs1) || (rd0 == rt1) || (rd0 == rd1));
+wire dep10 = (rd0!=5'd0)&&((rd0==rs1)||(rd0==rt1)||(rd0==rd1));
 
-/* bubble decisions */
 wire bubble0 = flush | stall;
 wire bubble1 = flush | stall | dep10;
 
-/* next IF/ID values */
 wire [31:0] IF_IR0_n = bubble0 ? 32'd0 : IF_instr0;
 wire [31:0] IF_IR1_n = bubble1 ? 32'd0 : IF_instr1;
 wire [63:0] IF_PC_n  = flush ? EX_MEM_PCtarget :
                        stall ? IF_ID_PC      : PC_plus8;
 
-/* ───────────────────────────── 2. Register read ─────────────────────── */
+/* ─────  2. Register File  ──────────────────────────────────────────── */
 wire [63:0] regA, regB, regC, regSP;
-register_file reg_file (
+register_file RF (
     .clk(clk), .reset(reset),
     .write     (MEM_WB_regW),
     .data_input(MEM_WB_val),
-    .registerOne(rs0), .registerTwo(rt0), .registerThree(rd0), // read‑ports keyed by slot‑0
+    .registerOne(rs0), .registerTwo(rt0), .registerThree(rd0),
     .writeAddress(MEM_WB_rd),
     .data_outputOne(regA), .data_outputTwo(regB),
     .data_outputThree(regC), .stackPointer(regSP)
 );
+wire [63:0] SE0 = {{52{L0[11]}},L0};
+wire [63:0] SE1 = {{52{L1[11]}},L1};
 
-/* literal sign‑extended ------------------------------------------------ */
-wire [63:0] SE0 = {{52{L0[11]}}, L0};
-wire [63:0] SE1 = {{52{L1[11]}}, L1};
-
-/* ───────────────────────────── 3. ID → EX ───────────────────────────── */
-reg [4:0]  ID_EX_op  [1:0], ID_EX_rd [1:0], ID_EX_rs [1:0], ID_EX_rt [1:0];
+/* ─────  3. ID → EX  ───────────────────────────────────────────────── */
+reg [4:0]  ID_EX_op  [1:0], ID_EX_rd [1:0], ID_EX_rs[1:0], ID_EX_rt[1:0];
 reg [63:0] ID_EX_A   [1:0], ID_EX_B [1:0], ID_EX_C [1:0];
 reg [63:0] ID_EX_SE  [1:0], ID_EX_PC;
 
-/* helper: destination of slot‑0 for **this** cycle (needed in EX/MEM) */
 wire [4:0] rd0_nxt = bubble0 ? 5'd0 : rd0;
 
-/* RAW hazard (slot‑0 vs EX/MEM/WB) ------------------------------------ */
-wire RAW_EX0  = EX_MEM_regW && (EX_MEM_rd != 5'd0) &&
-                ((EX_MEM_rd == rs0) || (EX_MEM_rd == rt0) || (EX_MEM_rd == rd0));
-wire RAW_MEM0 = MEM_WB_regW && (MEM_WB_rd != 5'd0) &&
-                ((MEM_WB_rd == rs0) || (MEM_WB_rd == rt0) || (MEM_WB_rd == rd0));
+/* RAW against EX/MEM/WB (slot‑0) */
+wire RAW_EX0  = EX_MEM_regW && (EX_MEM_rd!=0) &&
+                ((EX_MEM_rd==rs0)||(EX_MEM_rd==rt0)||(EX_MEM_rd==rd0));
+wire RAW_MEM0 = MEM_WB_regW && (MEM_WB_rd!=0) &&
+                ((MEM_WB_rd==rs0)||(MEM_WB_rd==rt0)||(MEM_WB_rd==rd0));
 assign stall  = RAW_EX0 | RAW_MEM0;
 
-/* pipeline register write -------------------------------------------- */
+/* latch */
 integer s;
 always @(posedge clk or posedge reset) begin
-    if (reset) begin
-        PC <= 64'h2000;  IF_ID_IR[0]<=0; IF_ID_IR[1]<=0; IF_ID_PC<=0;
-        for (s=0; s<2; s=s+1) begin
-            ID_EX_op[s]<=5'h1F; ID_EX_rd[s]<=0;
-        end
+    if(reset) begin
+        PC<=64'h2000; IF_ID_IR[0]<=0; IF_ID_IR[1]<=0; IF_ID_PC<=0;
+        for(s=0;s<2;s=s+1) begin ID_EX_op[s]<=5'h1F; ID_EX_rd[s]<=0; end
     end else begin
-        /* PC update */
-        if      (flush)  PC <= EX_MEM_PCtarget;
-        else if (!stall) PC <= PC_plus8;
+        /* PC */
+        if(flush) PC<=EX_MEM_PCtarget;
+        else if(!stall) PC<=PC_plus8;
 
-        /* IF→ID latch */
-        IF_ID_IR[0] <= IF_IR0_n; IF_ID_IR[1] <= IF_IR1_n; IF_ID_PC <= IF_PC_n;
+        /* IF→ID */
+        IF_ID_IR[0]<=IF_IR0_n; IF_ID_IR[1]<=IF_IR1_n; IF_ID_PC<=IF_PC_n;
 
         /* slot‑0 ID→EX */
-        ID_EX_op[0] <= bubble0 ? 5'h1F : op0;
-        ID_EX_rd[0] <= rd0_nxt;
-        ID_EX_rs[0] <= rs0;  ID_EX_rt[0] <= rt0;
-        ID_EX_A [0] <= regA; ID_EX_B [0] <= regB; ID_EX_C[0] <= regC;
-        ID_EX_SE[0] <= SE0;
+        ID_EX_op[0]<=bubble0?5'h1F:op0; ID_EX_rd[0]<=rd0_nxt;
+        ID_EX_rs[0]<=rs0; ID_EX_rt[0]<=rt0;
+        ID_EX_A [0]<=regA; ID_EX_B[0]<=regB; ID_EX_C[0]<=regC; ID_EX_SE[0]<=SE0;
 
-        /* slot‑1 ID→EX (shares read ports) */
-        ID_EX_op[1] <= bubble1 ? 5'h1F : op1;
-        ID_EX_rd[1] <= bubble1 ? 5'd0 : rd1;
-        ID_EX_rs[1] <= rs1;  ID_EX_rt[1] <= rt1;
-        ID_EX_A [1] <= regA; ID_EX_B [1] <= regB; ID_EX_C[1] <= regC;
-        ID_EX_SE[1] <= SE1;
+        /* slot‑1 ID→EX */
+        ID_EX_op[1]<=bubble1?5'h1F:op1; ID_EX_rd[1]<=bubble1?5'd0:rd1;
+        ID_EX_rs[1]<=rs1; ID_EX_rt[1]<=rt1;
+        ID_EX_A [1]<=regA; ID_EX_B[1]<=regB; ID_EX_C[1]<=regC; ID_EX_SE[1]<=SE1;
 
-        ID_EX_PC    <= IF_ID_PC;
+        ID_EX_PC<=IF_ID_PC;
     end
 end
 
-/* ───────────────────────────── 4. Forwarding (slot‑0) ───────────────── */
-wire fwdA_WB0 = MEM_WB_regW && (MEM_WB_rd!=0) && (MEM_WB_rd==ID_EX_rs[0]);
-wire fwdB_WB0 = MEM_WB_regW && (MEM_WB_rd!=0) && (MEM_WB_rd==ID_EX_rt[0]);
-wire [63:0] ALU_A0 = fwdA_WB0 ? MEM_WB_val : ID_EX_A[0];
-wire [63:0] ALU_B0 = fwdB_WB0 ? MEM_WB_val : ID_EX_B[0];
+/* ─────  4. Forwarding (WB → EX) for slot‑0  ───────────────────────── */
+wire fA_WB0 = MEM_WB_regW && (MEM_WB_rd!=0) && (MEM_WB_rd==ID_EX_rs[0]);
+wire fB_WB0 = MEM_WB_regW && (MEM_WB_rd!=0) && (MEM_WB_rd==ID_EX_rt[0]);
+wire [63:0] ALU_A0 = fA_WB0 ? MEM_WB_val : ID_EX_A[0];
+wire [63:0] ALU_B0 = fB_WB0 ? MEM_WB_val : ID_EX_B[0];
 
-/* ───────────────────────────── 5. Execution units ──────────────────── */
-/* slot‑0 → ALU (always present) */
-wire [63:0] aluY0, aluAddr0, aluPC0;
-wire aluTaken0, aluRegW0, aluMemW0, aluHlt0;
+/* ─────  5. Execution units ────────────────────────────────────────── */
+wire [63:0] aluY0, aluAddr0, aluPC0;  wire aluTaken0, aluRegW0, aluMemW0, aluHlt0;
 alu ALU0 (
-    .opcode(ID_EX_op[0]),
-    .inputDataOne(ALU_A0), .inputDataTwo(ALU_B0),
-    .inputDataThree(ID_EX_C[0]),
-    .signExtendedLiteral(ID_EX_SE[0]),
-    .programCounter(ID_EX_PC-64'd8),
-    .stackPointer(regSP),
-    .readMemory(dmem_rdata),
-    .result(aluY0), .readWriteAddress(aluAddr0),
-    .newProgramCounter(aluPC0), .branchTaken(aluTaken0),
-    .writeToRegister(aluRegW0), .writeToMemory(aluMemW0), .hlt(aluHlt0)
+    .opcode(ID_EX_op[0]), .inputDataOne(ALU_A0), .inputDataTwo(ALU_B0),
+    .inputDataThree(ID_EX_C[0]), .signExtendedLiteral(ID_EX_SE[0]),
+    .programCounter(ID_EX_PC-64'd8), .stackPointer(regSP), .readMemory(dmem_rdata),
+    .result(aluY0), .readWriteAddress(aluAddr0), .newProgramCounter(aluPC0),
+    .branchTaken(aluTaken0), .writeToRegister(aluRegW0),
+    .writeToMemory(aluMemW0), .hlt(aluHlt0)
 );
 
-/* slot‑1 → reuse ALU (swap for FPU if you like) */
-wire [63:0] aluY1, aluAddr1, aluPC1;
-wire aluTaken1, aluRegW1, aluMemW1, aluHlt1;
+wire [63:0] aluY1, aluAddr1, aluPC1;  wire aluTaken1, aluRegW1, aluMemW1, aluHlt1;
 alu ALU1 (
-    .opcode(ID_EX_op[1]),
-    .inputDataOne(ID_EX_A[1]), .inputDataTwo(ID_EX_B[1]),
-    .inputDataThree(ID_EX_C[1]),
-    .signExtendedLiteral(ID_EX_SE[1]),
-    .programCounter(ID_EX_PC-64'd4),
-    .stackPointer(regSP),
-    .readMemory(dmem_rdata),
-    .result(aluY1), .readWriteAddress(aluAddr1),
-    .newProgramCounter(aluPC1), .branchTaken(aluTaken1),
-    .writeToRegister(aluRegW1), .writeToMemory(aluMemW1), .hlt(aluHlt1)
+    .opcode(ID_EX_op[1]), .inputDataOne(ID_EX_A[1]), .inputDataTwo(ID_EX_B[1]),
+    .inputDataThree(ID_EX_C[1]), .signExtendedLiteral(ID_EX_SE[1]),
+    .programCounter(ID_EX_PC-64'd4), .stackPointer(regSP), .readMemory(dmem_rdata),
+    .result(aluY1), .readWriteAddress(aluAddr1), .newProgramCounter(aluPC1),
+    .branchTaken(aluTaken1), .writeToRegister(aluRegW1),
+    .writeToMemory(aluMemW1), .hlt(aluHlt1)
 );
 
-/* ─────────── choose branch target (slot‑0 wins) ────────────────────── */
+/* ─────  6. Branch target (slot‑0 wins) ─────────────────────────────── */
 wire        EX_MEM_brTkn    = aluTaken0 | aluTaken1;
 wire [63:0] EX_MEM_PCtarget = aluTaken0 ? aluPC0 : aluPC1;
 
-/* ───────────────────────────── 6. EX → MEM ─────────────────────────── */
+/* ─────  7. EX → MEM  (latch + new hlt flag)  ───────────────────────── */
 reg [4:0]  EX_MEM_rd;
 reg [63:0] EX_MEM_ALU, EX_MEM_addr;
 reg        EX_MEM_regW, EX_MEM_memW, EX_MEM_memToReg;
+reg        EX_MEM_hlt;                       // ★ new pipe‑stage flag
 always @(posedge clk or posedge reset) begin
-    if (reset) begin
+    if(reset) begin
         EX_MEM_rd<=0; EX_MEM_ALU<=0; EX_MEM_addr<=0;
-        EX_MEM_regW<=0; EX_MEM_memW<=0; EX_MEM_memToReg<=0;
+        EX_MEM_regW<=0; EX_MEM_memW<=0; EX_MEM_memToReg<=0; EX_MEM_hlt<=0;
     end else begin
-        EX_MEM_rd       <= rd0_nxt;                 // ← uses *next* valid rd
+        EX_MEM_rd       <= rd0_nxt;
         EX_MEM_ALU      <= aluY0;
         EX_MEM_addr     <= aluAddr0;
         EX_MEM_regW     <= aluRegW0;
         EX_MEM_memW     <= aluMemW0;
-        EX_MEM_memToReg <= (ID_EX_op[0]==5'h10);    // remember if slot‑0 was a load
+        EX_MEM_memToReg <= (ID_EX_op[0]==5'h10);   // load?
+        EX_MEM_hlt      <= aluHlt0 | aluHlt1;      // propagate HALT
     end
 end
 
-/* ───────────────────────────── 7. MEM → WB ─────────────────────────── */
-reg [4:0]  MEM_WB_rd;
-reg [63:0] MEM_WB_val;
+/* ─────  8. MEM → WB  (commit)  ─────────────────────────────────────── */
+reg [4:0]  MEM_WB_rd;  reg [63:0] MEM_WB_val;
 reg        MEM_WB_regW, MEM_WB_hlt;
 always @(posedge clk or posedge reset) begin
-    if (reset) begin
+    if(reset) begin
         MEM_WB_rd<=0; MEM_WB_val<=0; MEM_WB_regW<=0; MEM_WB_hlt<=0;
     end else begin
         MEM_WB_rd   <= EX_MEM_rd;
         MEM_WB_val  <= EX_MEM_memToReg ? dmem_rdata : EX_MEM_ALU;
         MEM_WB_regW <= EX_MEM_regW;
-        MEM_WB_hlt  <= aluHlt0 | aluHlt1;
+        MEM_WB_hlt  <= EX_MEM_hlt;            // ★ HALT only when instruction commits
     end
 end
 
 assign hlt = MEM_WB_hlt;
 
+/* ─────  end module  ─────────────────────────────────────────────── */
 endmodule
