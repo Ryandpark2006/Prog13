@@ -259,6 +259,10 @@ function automatic isWriteReg(input [4:0] op);
     end
 endfunction
 
+wire [63:0] signExtendedLiteral = {{52{L[11]}}, L};
+wire        local_hlt = (controlSignal==5'h0f) && (signExtendedLiteral[3:0]==4'h0);
+assign hlt = halted;
+
 wire hazard_IDEX = isWriteReg(id_ex_op) &&
                    ((id_ex_rd == rs_dec) || (id_ex_rd == rt_dec) || (id_ex_rd == rd_dec));
 
