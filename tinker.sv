@@ -1103,7 +1103,7 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    // Forwarding logic
+    // Forwarding logic (prioritize EX over MEM)
     wire forwardA_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs);
     wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs);
 
@@ -1113,14 +1113,14 @@ module tinker_core(
     wire forwardRD_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rd);
     wire forwardRD_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rd);
 
-    wire [63:0] forwarded_A = forwardA_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-                             (forwardA_EX  ? EX_MEM_ALU : ID_EX_A);
+    wire [63:0] forwarded_A = forwardA_EX ? EX_MEM_ALU :
+                             (forwardA_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_A);
 
-    wire [63:0] forwarded_B = forwardB_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-                             (forwardB_EX  ? EX_MEM_ALU : ID_EX_B);
+    wire [63:0] forwarded_B = forwardB_EX ? EX_MEM_ALU :
+                             (forwardB_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_B);
 
-    wire [63:0] forwarded_rdVal = forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-                                 (forwardRD_EX  ? EX_MEM_ALU : ID_EX_rdVal);
+    wire [63:0] forwarded_rdVal = forwardRD_EX ? EX_MEM_ALU :
+                                 (forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_rdVal);
 
     wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011) ? forwarded_rdVal : forwarded_A;
     wire [63:0] aluOp2 = ID_EX_rtPassed ? forwarded_B : {{52{ID_EX_L[11]}}, ID_EX_L};
@@ -1146,8 +1146,6 @@ module tinker_core(
         .updated_next     (aluUpdatedNext),
         .changing_pc      (aluChangePC)
     );
-
-    // [Pipeline register update logic and halt logic remains unchanged from original code]
 
     // Debug instrumentation
     integer cycle_count;
