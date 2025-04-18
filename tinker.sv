@@ -1157,29 +1157,25 @@ module tinker_core(
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
         end
-        else if (stall_cnt != 0) begin
-            // bubbling after reset‑stall or load‑use stall
-            stall_cnt <= stall_cnt - 1;
-            IF_ID_PC  <= 0;
-            IF_ID_IR  <= 0;
-        end
         else if (load_use_hazard) begin
-            // bubble the next instruction
+            // inject a NOP when you detect a load‑use hazard
             IF_ID_PC  <= 0;
-            IF_ID_IR  <= 32'h00000000;  // NOP
+            IF_ID_IR  <= 32'h00000000;
         end
         else if (EX_MEM_changePC) begin
-            // unified branch/jump/call/return redirect
+            // on any jump/branch/call/return
             PC        <= EX_MEM_target;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
         end
         else begin
-            // normal sequential fetch
+            // normal fetch
             PC        <= PC + 4;
             IF_ID_PC  <= PC;
             IF_ID_IR  <= inst;
         end
+        end
+
 
 
         // Cycle counter & debug print
