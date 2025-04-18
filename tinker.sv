@@ -1153,47 +1153,46 @@ module tinker_core(
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            // reset state
             PC        <= 64'h2000;
-            stall_cnt <= 0;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
-            cycle_count <= 0;
-        end else begin
-            // PC & IF/ID updates
-            if (stall_cnt != 0) begin
-                stall_cnt <= stall_cnt - 1;
-                IF_ID_PC  <= 0;
-                IF_ID_IR  <= 0;
-            end else if (EX_MEM_ctrl == 5'b01101) begin
-                PC        <= EX_MEM_ALU; // EX_MEM_ALU = r_out = return address
-                IF_ID_PC  <= 0;
-                IF_ID_IR  <= 0;
-            end else if (EX_MEM_changePC) begin
-                PC        <= EX_MEM_target;
-                IF_ID_PC  <= 0;
-                IF_ID_IR  <= 0;
-            end else if (load_use_hazard) begin
-                IF_ID_PC  <= 0;
-                IF_ID_IR  <= 32'h00000000; // NOP
-            end else begin
-                PC        <= PC + 4;
-                IF_ID_PC  <= PC;
-                IF_ID_IR  <= inst;
-            end
+        end
+        else if (stall_cnt != 0) begin
+            // bubbling after reset‑stall or load‑use stall
+            stall_cnt <= stall_cnt - 1;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
+        end
+        else if (load_use_hazard) begin
+            // bubble the next instruction
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 32'h00000000;  // NOP
+        end
+        else if (EX_MEM_changePC) begin
+            // unified branch/jump/call/return redirect
+            PC        <= EX_MEM_target;
+            IF_ID_PC  <= 0;
+            IF_ID_IR  <= 0;
+        end
+        else begin
+            // normal sequential fetch
+            PC        <= PC + 4;
+            IF_ID_PC  <= PC;
+            IF_ID_IR  <= inst;
+        end
 
-            // Cycle counter & debug print
-            cycle_count <= cycle_count + 1;
-            if (cycle_count <= 15) begin
-                $display("CYCLE %0d --------------------------------", cycle_count);
-                $display("  PC               = 0x%016h", PC);
-                $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
-                $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h", ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
-                $display("  EX_MEM.changePC=%b updated_next=0x%016h", EX_MEM_changePC, EX_MEM_target);
-                $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
-                $display("  MEM_WB.rd=%0d wb=0x%016h", MEM_WB_rd, MEM_WB_ALU);
-                $display("");
-            end
+
+        // Cycle counter & debug print
+        cycle_count <= cycle_count + 1;
+        if (cycle_count <= 15) begin
+            $display("CYCLE %0d --------------------------------", cycle_count);
+            $display("  PC               = 0x%016h", PC);
+            $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
+            $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h", ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
+            $display("  EX_MEM.changePC=%b updated_next=0x%016h", EX_MEM_changePC, EX_MEM_target);
+            $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
+            $display("  MEM_WB.rd=%0d wb=0x%016h", MEM_WB_rd, MEM_WB_ALU);
+            $display("");
         end
     end
 
