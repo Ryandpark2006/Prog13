@@ -437,7 +437,7 @@ module tinker_core(
             EX_MEM_addr     <= aluAddr;
             EX_MEM_wrData   <= aluWrData;
             EX_MEM_changePC <= aluChangePC;
-            EX_MEM_target <= (EX_MEM_ctrl == 5'b01101) ? mem_rdata : aluUpdatedNext;
+            EX_MEM_target <= (ID_EX_ctrl == 5'b01101) ? mem_rdata : aluUpdatedNext;
         end
     end
 
