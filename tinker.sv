@@ -390,6 +390,7 @@ module tinker_core(
             PC        <= EX_MEM_target;  // new PC from the ALU
             IF_ID_PC  <= 0;              // flush
             IF_ID_IR  <= 0;
+            stall_cnt <= 1;  // <-- force one extra bubble to flush ID/EX
         end
         else begin
             // normal sequential fetch
