@@ -79,18 +79,12 @@ module ALU(
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
             5'b01101: begin  // return
-                // writeEnable      = 1'b0;
-                // mem_write_enable = 1'b0;
-                // changing_pc      = 1'b1;
-                // rw_addr          = r31_val - 8; // pop return address slot
-                // updated_next     = r_out;       // jump there
                 writeEnable      = 1'b0;
-                changing_pc      = 1'b1;
                 mem_write_enable = 1'b0;
-                // rw_addr          = r31_val - 8;
-                // updated_next     = r_out;
-                updated_next     = 64'h2000; // hardcoded for test
-
+                rw_addr          = r31_val - 8;
+                changing_pc      = 1'b0;
+                updated_next     = pc;
+                result           = r_out;
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
@@ -113,6 +107,7 @@ module ALU(
         endcase
     end
 endmodule
+
 
 module FPU(
     input wire [63:0] operand1,
@@ -862,6 +857,10 @@ module tinker_core(
             // PC & IF/ID updates
             if (stall_cnt != 0) begin
                 stall_cnt <= stall_cnt - 1;
+                IF_ID_PC  <= 0;
+                IF_ID_IR  <= 0;
+            end else if (EX_MEM_ctrl == 5'b01101) begin
+                PC        <= EX_MEM_ALU; // EX_MEM_ALU = r_out = return address
                 IF_ID_PC  <= 0;
                 IF_ID_IR  <= 0;
             end else if (EX_MEM_changePC) begin
