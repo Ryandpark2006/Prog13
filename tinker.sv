@@ -85,10 +85,10 @@ module ALU(
                 // rw_addr          = r31_val - 8; // pop return address slot
                 // updated_next     = r_out;       // jump there
                 writeEnable      = 1'b0;
-                mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
-                rw_addr          = 32'd0;           // nuke any memory ops
-                updated_next     = pc + 64'd8;     // skip one instruction
+                mem_write_enable = 1'b1;
+                rw_addr          = r31_val - 8;
+                updated_next     = r_out;
 
             end
             5'b01100: begin // call
