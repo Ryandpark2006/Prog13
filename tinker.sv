@@ -241,7 +241,7 @@ assign hlt = MEM_WB_hlt;
 /* ───── unified memory (dual‑ported internally) ────────────────── */
 wire [31:0] fetchedInstr;
 wire [63:0] dmem_rdata;
-memory MEM (
+memory memory (
     .clk            (clk),
     .programCounter (PC),
     .dataAddress    (EX_MEM_addr),
@@ -259,7 +259,7 @@ decoder DEC (.instruction(IF_ID_IR), .opcode(op),
 wire [63:0] SExt = {{52{L[11]}}, L};
 
 wire [63:0] regA, regB, regC, regSP;
-register_file RF (
+register_file reg_file (
     .clk         (clk),
     .reset       (reset),
     .write       (MEM_WB_writeReg),
