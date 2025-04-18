@@ -162,6 +162,7 @@ endmodule
 module memory(
     input  wire [63:0] pc,
     input  wire        clk,
+    input  wire        reset,
     input  wire        mem_write_enable,
     input  wire [63:0] rw_val,
     input  wire [31:0] rw_addr,
@@ -170,17 +171,16 @@ module memory(
 );
     reg [7:0] bytes [524287:0];
 
-    // instruction fetch is still combinational
     assign instruction = {bytes[pc+3], bytes[pc+2], bytes[pc+1], bytes[pc]};
-    // data read is combinational too
-    assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6],
-                          bytes[rw_addr+5], bytes[rw_addr+4],
-                          bytes[rw_addr+3], bytes[rw_addr+2],
-                          bytes[rw_addr+1], bytes[rw_addr]};
+    assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6], bytes[rw_addr+5], bytes[rw_addr+4],
+                          bytes[rw_addr+3], bytes[rw_addr+2], bytes[rw_addr+1], bytes[rw_addr]};
 
-    // only write on clock, never clear on reset
-    always @(posedge clk) begin
-        if (mem_write_enable) begin
+    integer i;
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            for (i = 0; i < 524288; i = i + 1)
+                bytes[i] <= 8'b0;
+        end else if (mem_write_enable) begin
             bytes[rw_addr+7] <= rw_val[63:56];
             bytes[rw_addr+6] <= rw_val[55:48];
             bytes[rw_addr+5] <= rw_val[47:40];
@@ -192,7 +192,6 @@ module memory(
         end
     end
 endmodule
-
 
 module register_file(
     input  wire        clk,
@@ -228,7 +227,6 @@ module register_file(
         end
     end
 endmodule
-
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -263,12 +261,12 @@ module tinker_core(
         (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
     );
 
-    // ◄◄ NEW ►► flush as soon as a branch/jump returns from EX/MEM
-    wire flushFetch = EX_MEM_changePC;
-    // ◄◄ NEW ►► combine load-use & multi-cycle stalls
+    // ◄◄ UPDATED ►► flush as soon as the EX-stage ALU says “change PC”
+    wire flushFetch = aluChangePC;
+    // ◄◄ UPDATED ►► combine stalls
     wire fetchStall = load_use_hazard || (stall_cnt != 0);
 
-    // ◄◄ NEW ►► compute bubble values for IF/ID
+    // ◄◄ UPDATED ►► compute bubble values for IF/ID
     wire [31:0] next_IF_ID_IR = flushFetch   ? 32'd0 :
                                 fetchStall   ? 32'd0 :
                                                inst;
@@ -302,7 +300,7 @@ module tinker_core(
     memory memory (
         .pc               (PC),
         .clk              (clk),
-        // .reset            (reset),
+        .reset            (reset),
         .mem_write_enable (EX_MEM_memWrite),
         .rw_val           (EX_MEM_wrData),
         .rw_addr          (EX_MEM_addr),
@@ -329,7 +327,7 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    // Forwarding logic (prioritize EX over MEM)
+    // Forwarding logic
     wire forwardA_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs);
     wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs);
 
@@ -388,9 +386,9 @@ module tinker_core(
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
         end else begin
-            // 1) PC update: on a flush go to target, else advance when not stalled
+            // 1) PC update: flush from EX-stage or normal advance
             if (flushFetch)
-                PC <= EX_MEM_target;
+                PC <= aluUpdatedNext;
             else if (!fetchStall)
                 PC <= PC + 4;
 
@@ -398,7 +396,7 @@ module tinker_core(
             IF_ID_PC <= next_IF_ID_PC;
             IF_ID_IR <= next_IF_ID_IR;
 
-            // 3) cycle counter & debug prints (unchanged)
+            // 3) debug prints unchanged
             cycle_count <= cycle_count + 1;
             if (cycle_count <= 15) begin
                 $display("CYCLE %0d --------------------------------", cycle_count);
@@ -415,7 +413,7 @@ module tinker_core(
         end
     end
 
-    // ID/EX register update (unchanged)
+    // ID/EX register update unchanged
     always @(posedge clk or posedge reset) begin
         if (reset || EX_MEM_changePC || stall_cnt != 0) begin
             ID_EX_ctrl     <= 0;
@@ -444,7 +442,7 @@ module tinker_core(
         end
     end
 
-    // EX/MEM register update (unchanged)
+    // EX/MEM register update unchanged
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -471,7 +469,7 @@ module tinker_core(
         end
     end
 
-    // MEM/WB register update (unchanged)
+    // MEM/WB register update unchanged
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
@@ -490,7 +488,7 @@ module tinker_core(
         end
     end
 
-    // Halt logic (unchanged)
+    // Halt logic unchanged
     reg halt_flag;
     always @(posedge clk or posedge reset) begin
         if (reset)
