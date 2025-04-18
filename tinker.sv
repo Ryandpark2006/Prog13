@@ -1,29 +1,30 @@
-// Fix 1: Clean up ALU return implementation
 module ALU(
-    input wire [63:0] pc,
-    input wire [63:0] rdVal,
-    input wire [63:0] operand1,
-    input wire [63:0] operand2,
-    input wire [4:0] opcode,
-    input wire [63:0] r_out,
-    input wire [63:0] r31_val,
-    output reg [63:0] result,
-    output reg writeEnable,
-    output reg mem_write_enable,
-    output reg [31:0] rw_addr,
-    output reg [63:0] rw_val,
-    output reg [63:0] updated_next,
-    output reg changing_pc
+    input  wire [63:0] pc,
+    input  wire [63:0] rdVal,
+    input  wire [63:0] operand1,
+    input  wire [63:0] operand2,
+    input  wire [4:0]  opcode,
+    input  wire [63:0] r_out,
+    input  wire [63:0] r31_val,
+    output reg  [63:0] result,
+    output reg         writeEnable,
+    output reg         mem_write_enable,
+    output reg  [31:0] rw_addr,
+    output reg  [63:0] rw_val,
+    output reg  [63:0] updated_next,
+    output reg         changing_pc
 );
     always @(*) begin
+        // --- full defaults to avoid inferred latches ---
+        result           = 64'd0;
+        rw_addr          = 32'd0;
+        rw_val           = 64'd0;
         writeEnable      = 1'b1;
         mem_write_enable = 1'b0;
         changing_pc      = 1'b0;
         updated_next     = pc + 4;
-        result           = 64'b0;
-        rw_addr          = 32'b0;
-        rw_val           = 64'b0;
-        
+        // -------------------------------------------------
+
         case (opcode)
             5'b11000: result = operand1 + operand2;  // add
             5'b11001: result = operand1 + operand2;  // addi
@@ -56,6 +57,7 @@ module ALU(
                 rw_val           = operand1;
             end
 
+            // Jumps & branches
             5'b01000: begin // jump
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
@@ -81,31 +83,33 @@ module ALU(
             5'b01110: begin // brgt
                 writeEnable = 1'b0;
                 changing_pc = 1'b1;
-                updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
+                updated_next = ($signed(operand1) > $signed(operand2)) 
+                               ? rdVal 
+                               : pc + 4;
             end
-            5'b01101: begin  // return - Fixed implementation
+            5'b01101: begin  // return
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
-                mem_write_enable = 1'b0;
+                // no memory write on return
                 rw_addr          = r31_val - 8;
-                updated_next     = r_out;  // Jump to address stored at r31_val-8
+                updated_next     = r_out;
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
                 mem_write_enable = 1'b1;
-                rw_val           = pc + 4;  // Store return address
+                rw_val           = pc + 4;
                 rw_addr          = r31_val - 8;
-                updated_next     = rdVal;   // Jump to target address
+                updated_next     = rdVal;
             end
 
             default: begin
-                writeEnable      = 1'b0;
-                mem_write_enable = 1'b0;
+                // writeEnable and mem_write_enable already defaulted above
             end
         endcase
     end
 endmodule
+
 
 module FPU(
     input wire [63:0] operand1,
@@ -225,7 +229,6 @@ module register_file(
     end
 endmodule
 
-// Fix 2: Update hazard detection for better coverage
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
@@ -254,10 +257,10 @@ module tinker_core(
         .rtPassed     (IF_rtPassed)
     );
 
-    // Improved hazard detection (load-use)
-    wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (EX_MEM_rd != 0) && (
-        (EX_MEM_rd == IF_rs) ||
-        (EX_MEM_rd == IF_rt && IF_rtPassed)
+    // Hazard detection (load-use)
+    wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (
+        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rs) ||
+        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
     );
 
     // ID/EX Pipeline Registers
@@ -315,13 +318,13 @@ module tinker_core(
 
     // Forwarding logic (prioritize EX over MEM)
     wire forwardA_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs);
-    wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs) && !forwardA_EX;
+    wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs);
 
     wire forwardB_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rt) && ID_EX_rtPassed;
-    wire forwardB_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rt) && ID_EX_rtPassed && !forwardB_EX;
+    wire forwardB_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rt) && ID_EX_rtPassed;
 
     wire forwardRD_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rd);
-    wire forwardRD_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rd) && !forwardRD_EX;
+    wire forwardRD_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rd);
 
     wire [63:0] forwarded_A = forwardA_EX ? EX_MEM_ALU :
                              (forwardA_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) : ID_EX_A);
@@ -342,7 +345,7 @@ module tinker_core(
     wire [63:0] aluWrData;
     ALU ALU_INST(
         .pc               (ID_EX_PC),
-        .rdVal            (forwarded_rdVal),  // Use forwarded value
+        .rdVal            (ID_EX_rdVal),
         .operand1         (aluOp1),
         .operand2         (aluOp2),
         .opcode           (ID_EX_ctrl),
@@ -361,8 +364,8 @@ module tinker_core(
     integer cycle_count;
     initial cycle_count = 0;
 
-    // Handle special instructions and pipeline control
     always @(posedge clk or posedge reset) begin
+
         if (reset) begin
             PC        <= 64'h2000;
             stall_cnt <= 0;
@@ -389,7 +392,6 @@ module tinker_core(
             IF_ID_PC  <= 0;              // flush
             IF_ID_IR  <= 0;
         end
-        // Fix return handling - removed the empty else-if for IF_ctrl == 5'b01101
         else begin
             // normal sequential fetch
             PC        <= PC + 4;
@@ -402,7 +404,7 @@ module tinker_core(
         if (cycle_count <= 15) begin
             $display("CYCLE %0d --------------------------------", cycle_count);
             $display("  PC               = 0x%016h", PC);
-            $display("  IF_ID.inst       = 0x%08h", IF_ID_IR);
+            $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
             $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h", ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
             $display("  EX_MEM.changePC=%b updated_next=0x%016h", EX_MEM_changePC, EX_MEM_target);
             $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
@@ -495,4 +497,5 @@ module tinker_core(
             halt_flag <= 1;
     end
     assign hlt = halt_flag;
+
 endmodule
