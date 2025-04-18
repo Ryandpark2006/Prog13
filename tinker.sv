@@ -1174,8 +1174,6 @@ module tinker_core(
             IF_ID_PC  <= PC;
             IF_ID_IR  <= inst;
         end
-        end
-
 
 
         // Cycle counter & debug print
