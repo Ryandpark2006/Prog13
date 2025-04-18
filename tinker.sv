@@ -387,7 +387,6 @@ module tinker_core(
     end
     assign hlt = halt_flag;
 
-    // IF/ID registers
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC        <= 64'h2000;
@@ -403,20 +402,19 @@ module tinker_core(
         end
     end
 
-    // ID/EX registers
     always @(posedge clk or posedge reset) begin
         if (reset || flushFetch || fetchStall) begin
             ID_EX_ctrl     <= 5'h1F;
-            ID_EX_rd       <= 0;
-            ID_EX_rs       <= 0;
-            ID_EX_rt       <= 0;
-            ID_EX_L        <= 0;
-            ID_EX_rtPassed <= 0;
-            ID_EX_A        <= 0;
-            ID_EX_B        <= 0;
-            ID_EX_PC       <= 0;
-            ID_EX_r31      <= 0;
-            ID_EX_rdVal    <= 0;
+            ID_EX_rd       <= IF_rd;
+            ID_EX_rs       <= IF_rs;
+            ID_EX_rt       <= IF_rt;
+            ID_EX_L        <= IF_L;
+            ID_EX_rtPassed <= IF_rtPassed;
+            ID_EX_A        <= regOut1;
+            ID_EX_B        <= regOut2;
+            ID_EX_PC       <= IF_ID_PC;
+            ID_EX_r31      <= r31Val;
+            ID_EX_rdVal    <= rdValSignal;
         end else begin
             ID_EX_ctrl     <= IF_ctrl;
             ID_EX_rd       <= IF_rd;
@@ -432,7 +430,6 @@ module tinker_core(
         end
     end
 
-    // EX/MEM registers
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -459,7 +456,6 @@ module tinker_core(
         end
     end
 
-    // MEM/WB registers
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
