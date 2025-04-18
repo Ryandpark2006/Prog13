@@ -226,7 +226,7 @@ reg        mem_wb_regw , mem_wb_hlt;
 wire [31:0] imem_out;
 wire [63:0] dmem_out;
 
-memory mem (
+memory memory (
     .clk(clk),
     .programCounter(pc),
     .dataAddress(ex_mem_addr),
@@ -246,7 +246,7 @@ decoder dec (
 
 /* register file */
 wire [63:0] reg_a, reg_b, reg_c, reg_sp;
-registers regs (
+register_file reg_file (
     .clk(clk), .reset(reset),
     .write(mem_wb_regw),
     .data_input(mem_wb_val),
