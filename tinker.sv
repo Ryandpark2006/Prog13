@@ -302,7 +302,7 @@ module tinker_core(
     memory memory (
         .pc               (PC),
         .clk              (clk),
-        .reset            (reset),
+        // .reset            (reset),
         .mem_write_enable (EX_MEM_memWrite),
         .rw_val           (EX_MEM_wrData),
         .rw_addr          (EX_MEM_addr),
