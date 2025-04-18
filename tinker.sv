@@ -1390,18 +1390,10 @@ module tinker_core(
         forwardB_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
         ID_EX_B;
 
-    // wire [63:0] forwarded_rdVal =
-    //     forwardRD_EX  ? EX_MEM_ALU :
-    //     forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-    //     ID_EX_rdVal;
-
     wire [63:0] forwarded_rdVal =
-    (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == IF_rd) ?
-        (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-    (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == IF_rd) ?
-        EX_MEM_ALU :
-    rdValSignal;
-
+        forwardRD_EX  ? EX_MEM_ALU :
+        forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+        ID_EX_rdVal;
 
     wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011) ? forwarded_rdVal : forwarded_A;
     wire [63:0] aluOp2 = ID_EX_rtPassed ? forwarded_B : {{52{ID_EX_L[11]}}, ID_EX_L};
