@@ -395,7 +395,7 @@ module tinker_core(
     // --- Memory (inst + data) hooked to EX_MEM signals ---
     wire [31:0] inst;
     wire [63:0] mem_rdata;
-    memory memory_inst(
+    memory memory(
         .pc               (PC),
         .clk              (clk),
         .reset            (reset),
