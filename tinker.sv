@@ -791,7 +791,29 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    // Forwarding logic
+    // // Forwarding logic
+    // wire [63:0] ex_forward_A =
+    //     (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
+    //     ? EX_MEM_ALU : ID_EX_A;
+    // wire [63:0] mem_forward_A =
+    //     (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
+    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+    //     : ex_forward_A;
+    // wire [63:0] aluOp1 =
+    //     (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
+    //     ? ID_EX_rdVal : mem_forward_A;
+
+    // wire [63:0] ex_forward_B =
+    //     (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt && ID_EX_rtPassed)
+    //     ? EX_MEM_ALU : ID_EX_B;
+    // wire [63:0] mem_forward_B =
+    //     (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt && ID_EX_rtPassed)
+    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+    //     : ex_forward_B;
+    // wire [63:0] aluOp2 = ID_EX_rtPassed
+    //     ? mem_forward_B
+    //     : {{52{ID_EX_L[11]}}, ID_EX_L};
+        // Forwarding logic
     wire [63:0] ex_forward_A =
         (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
         ? EX_MEM_ALU : ID_EX_A;
@@ -799,9 +821,6 @@ module tinker_core(
         (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
         ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
         : ex_forward_A;
-    wire [63:0] aluOp1 =
-        (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
-        ? ID_EX_rdVal : mem_forward_A;
 
     wire [63:0] ex_forward_B =
         (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt && ID_EX_rtPassed)
@@ -810,6 +829,19 @@ module tinker_core(
         (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt && ID_EX_rtPassed)
         ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
         : ex_forward_B;
+
+    wire [63:0] ex_forward_rdVal =
+        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rd)
+        ? EX_MEM_ALU : ID_EX_rdVal;
+    wire [63:0] mem_forward_rdVal =
+        (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rd)
+        ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+        : ex_forward_rdVal;
+
+    wire [63:0] aluOp1 =
+        (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
+        ? mem_forward_rdVal : mem_forward_A;
+
     wire [63:0] aluOp2 = ID_EX_rtPassed
         ? mem_forward_B
         : {{52{ID_EX_L[11]}}, ID_EX_L};
