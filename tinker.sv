@@ -565,21 +565,20 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
-        ? ID_EX_rdVal
-        : (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
-            ? EX_MEM_ALU
-            : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
-                ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-                : ID_EX_A;
+    // === FORWARDING FOR operand1 (rs) ===
+    wire fwd_rs_EX = (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs);
+    wire fwd_rs_MEM = (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs);
+    wire [63:0] aluOp1 = fwd_rs_EX ? EX_MEM_ALU :
+                         fwd_rs_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+                         ID_EX_A;
 
-    wire [63:0] aluOp2_pre = ID_EX_B;
-    wire [63:0] aluOp2 = ID_EX_rtPassed ? aluOp2_pre
-                         : (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt)
-                           ? EX_MEM_ALU
-                           : (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt)
-                             ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-                             : aluOp2_pre;
+    // === FORWARDING FOR operand2 (rt or L) ===
+    wire fwd_rt_EX = (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt);
+    wire fwd_rt_MEM = (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt);
+    wire [63:0] aluOp2_reg = fwd_rt_EX ? EX_MEM_ALU :
+                             fwd_rt_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+                             ID_EX_B;
+    wire [63:0] aluOp2 = ID_EX_rtPassed ? aluOp2_reg : {{52{ID_EX_L[11]}}, ID_EX_L};
 
     wire [63:0] aluResult, aluUpdatedNext;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
