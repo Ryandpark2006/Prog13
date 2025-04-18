@@ -86,7 +86,8 @@ module ALU(
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
-                updated_next     = pc + 8;        // **MODIFIED**
+                rw_addr          = r31_val - 8; // pop return address slot
+                updated_next     = r_out;       // jump there
             end
 
             // **Call** remains unchanged
@@ -321,18 +322,17 @@ module tinker_core(
     //         : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
     //             ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
     //             : aluOp2_pre;
-        // literal value (sign‐extend L) vs. register
     wire [63:0] literal = {{52{ID_EX_L[11]}}, ID_EX_L};
-    // if rtPassed==0 → literal branch, otherwise register→forward/register
+
+    // operand2 = literal if rtPassed==0; else register-with-forwarding
     wire [63:0] aluOp2 = ID_EX_rtPassed
-        // → register operand: try EX stage forward, then MEM stage, else the ID_EX_B
-        ? ((EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
-               ? EX_MEM_ALU
-               : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
-                   ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-                   : ID_EX_B)
-        // → literal operand: just use the sign‐extended immediate
-        : literal;
+      ? ( (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
+            ? EX_MEM_ALU
+            : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
+                ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
+                : ID_EX_B )
+      : literal;
+
 
 
     // ALU instance
