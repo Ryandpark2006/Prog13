@@ -281,27 +281,18 @@ wire load_use_hazard = ex_mem_is_load &&
 
 wire stall_if = load_use_hazard;
 
-/* forwarded operands for the upcoming EX stage */
-wire fwd_ex_rs = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
-                  (id_ex_rd == dec_rs));
-wire fwd_mem_rs = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
-                   (ex_mem_rd == dec_rs));
-wire fwd_wb_rs  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
-                   (mem_wb_rd == dec_rs));
+/* ----------- forwarding comparators (allow rd==0) -------------*/
+wire fwd_ex_rs  = (id_ex_we_reg && (id_ex_rd == dec_rs));
+wire fwd_mem_rs = (ex_mem_we_reg && (ex_mem_rd == dec_rs));
+wire fwd_wb_rs  = (mem_wb_we_reg && (mem_wb_rd == dec_rs));
 
-wire fwd_ex_rt = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
-                  (id_ex_rd == dec_rt));
-wire fwd_mem_rt = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
-                   (ex_mem_rd == dec_rt));
-wire fwd_wb_rt  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
-                   (mem_wb_rd == dec_rt));
+wire fwd_ex_rt  = (id_ex_we_reg && (id_ex_rd == dec_rt));
+wire fwd_mem_rt = (ex_mem_we_reg && (ex_mem_rd == dec_rt));
+wire fwd_wb_rt  = (mem_wb_we_reg && (mem_wb_rd == dec_rt));
 
-wire fwd_ex_rd = (id_ex_we_reg && (id_ex_rd != 5'd0) &&
-                  (id_ex_rd == dec_rd));
-wire fwd_mem_rd = (ex_mem_we_reg && (ex_mem_rd != 5'd0) &&
-                   (ex_mem_rd == dec_rd));
-wire fwd_wb_rd  = (mem_wb_we_reg && (mem_wb_rd != 5'd0) &&
-                   (mem_wb_rd == dec_rd));
+wire fwd_ex_rd  = (id_ex_we_reg && (id_ex_rd == dec_rd));
+wire fwd_mem_rd = (ex_mem_we_reg && (ex_mem_rd == dec_rd));
+wire fwd_wb_rd  = (mem_wb_we_reg && (mem_wb_rd == dec_rd));
 
 wire [63:0] dec_a = fwd_ex_rs ? alu_out  :
                     fwd_mem_rs ? ex_mem_res :
