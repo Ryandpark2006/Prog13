@@ -509,7 +509,7 @@ module tinker_core(
     wire [63:0] mem_rdata;
 
     // Instantiate memory with correct PC
-    memory memory_inst(
+    memory memory(
         .pc(PC),
         .clk(clk),
         .reset(reset),
@@ -536,7 +536,7 @@ module tinker_core(
 
     // Register file
     wire [63:0] regOut1, regOut2, rdVal, r31_val;
-    register_file regfile_inst(
+    register_file reg_file(
         .clk(clk),
         .reset(reset),
         .write_enable(MEM_WB_regWrite),
