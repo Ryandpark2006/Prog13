@@ -261,7 +261,7 @@ wire [63:0] sext = {{52{lit[11]}}, lit};
 
 /* hazard detect */
 // wire idex_regw = (id_ex_op != 5'h1f) && (id_ex_op < 5'h08 || id_ex_op > 5'h0f) && (id_ex_op != 5'h13);
-wire idex_reg = (id_ex_op != 5'h1F) &&           // not a bubble
+wire idex_regw = (id_ex_op != 5'h1F) &&           // not a bubble
                     (id_ex_op != 5'h08) &&           // br
                     (id_ex_op != 5'h09) &&           // brr rd
                     (id_ex_op != 5'h0a) &&           // brr L
