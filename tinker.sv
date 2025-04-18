@@ -1,10 +1,3 @@
-// Fully Edited Tinker Core and Associated Modules (FSM Style)
-// Includes fixes for CALL and MOV_L_TO_REG
-
-//------------------------------------------------------
-// ALU Module
-//------------------------------------------------------
-// --------- Improved ALU Literal Handling ---------
 module ALU(
     input wire [63:0] pc,
     input wire [63:0] rdVal,
@@ -468,6 +461,38 @@ module tinker_core(
             IF_ID_IR <= inst;
         end
     end
+
+    // -------------------------
+    // ID Stage Latching Logic
+    // -------------------------
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            ID_EX_PC        <= 0;
+            ID_EX_ctrl      <= 0;
+            ID_EX_rd        <= 0;
+            ID_EX_rs        <= 0;
+            ID_EX_rt        <= 0;
+            ID_EX_L         <= 0;
+            ID_EX_rtPassed  <= 0;
+            ID_EX_A         <= 0;
+            ID_EX_B         <= 0;
+            ID_EX_rdVal     <= 0;
+            ID_EX_r31       <= 0;
+        end else begin
+            ID_EX_PC        <= IF_ID_PC;
+            ID_EX_ctrl      <= IF_ctrl;
+            ID_EX_rd        <= IF_rd;
+            ID_EX_rs        <= IF_rs;
+            ID_EX_rt        <= IF_rt;
+            ID_EX_L         <= IF_L;
+            ID_EX_rtPassed  <= IF_rtPassed;
+            ID_EX_A         <= regOut1;
+            ID_EX_B         <= regOut2;
+            ID_EX_rdVal     <= rdVal;
+            ID_EX_r31       <= r31Val;
+        end
+    end
+
 
     assign hlt = (MEM_WB_ctrl == 5'h0f);
 endmodule
