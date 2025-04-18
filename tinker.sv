@@ -1152,9 +1152,7 @@ module tinker_core(
     initial cycle_count = 0;
 
     always @(posedge clk or posedge reset) begin
-            // in your tinker_core, replace the existing PC update always block with this:
 
-    always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC        <= 64'h2000;
             stall_cnt <= 0;
