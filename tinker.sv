@@ -187,9 +187,8 @@ module decoder (
     assign lit  = instr[11:0];
 endmodule
 
-
 // ================================================================
-// tinker_core — now with EX and MEM forwarding
+// tinker_core – forwarding fixed for src_c and load/return stall
 // ================================================================
 module tinker_core (
     input  wire clk,
@@ -203,8 +202,8 @@ module tinker_core (
 reg  [63:0] pc_reg;
 wire [63:0] pc_plus4 = pc_reg + 64'd4;
 
-/* branch flush  */
-wire flush_if  = ex_mem_br;   // branch/jump/return resolved in EX
+/* branch flush (resolved in EX) */
+wire flush_if = ex_mem_br;
 
 /* ----------------------------------------------------------------
    1. IF / ID
@@ -276,18 +275,17 @@ register_file reg_file (
 );
 
 /* ----------------------------------------------------------------
-   7. hazard detection — **stall only for load‑use**
+   7. stall detector – load‑use or return‑use
 -----------------------------------------------------------------*/
-wire load_use_hazard = (ex_mem_op == 5'h10) &&      // EX/MEM is a LOAD
-                       (ex_mem_rd != 0) &&
-                       ( (ex_mem_rd == dec_rs) ||
-                         (ex_mem_rd == dec_rt) ||
-                         (ex_mem_rd == dec_rd) );
+wire load_use_hazard =
+       ((ex_mem_op == 5'h10) || (ex_mem_op == 5'h0d)) &&   // load OR return
+       (ex_mem_rd != 0) &&
+       ((ex_mem_rd == dec_rs) || (ex_mem_rd == dec_rt) || (ex_mem_rd == dec_rd));
 
 wire stall_if = load_use_hazard;
 
 /* ----------------------------------------------------------------
-   8. pipeline register write‑ins
+   8. build next IF/ID and ID/EX values
 -----------------------------------------------------------------*/
 wire [31:0] nxt_if_ir  = flush_if ? 32'd0 : (stall_if ? if_id_ir  : instr_fetch);
 wire [63:0] nxt_if_pc4 = flush_if ? 64'd0 : (stall_if ? if_id_pc4 : pc_plus4);
@@ -295,29 +293,29 @@ wire [63:0] nxt_if_pc4 = flush_if ? 64'd0 : (stall_if ? if_id_pc4 : pc_plus4);
 localparam [4:0] BUBBLE_OP = 5'h1f;
 wire bubble = flush_if | stall_if;
 
-wire [4:0]  nxt_op   = bubble ? BUBBLE_OP : dec_op;
-wire [4:0]  nxt_rd   = bubble ? 5'd0      : dec_rd;
-wire [4:0]  nxt_rs   = bubble ? 5'd0      : dec_rs;
-wire [4:0]  nxt_rt   = bubble ? 5'd0      : dec_rt;
+wire [4:0]  nxt_op  = bubble ? BUBBLE_OP : dec_op;
+wire [4:0]  nxt_rd  = bubble ? 5'd0      : dec_rd;
+wire [4:0]  nxt_rs  = bubble ? 5'd0      : dec_rs;
+wire [4:0]  nxt_rt  = bubble ? 5'd0      : dec_rt;
 
-wire [63:0] nxt_a    = bubble ? 64'd0 : reg_a;
-wire [63:0] nxt_b    = bubble ? 64'd0 : reg_b;
-wire [63:0] nxt_c    = bubble ? 64'd0 : reg_c;
-wire [63:0] nxt_imm  = bubble ? 64'd0 : imm_ext;
-wire [63:0] nxt_pc4  = bubble ? 64'd0 : if_id_pc4;
-wire [63:0] nxt_sp   = bubble ? 64'd0 : sp_reg;
+wire [63:0] nxt_a   = bubble ? 64'd0 : reg_a;
+wire [63:0] nxt_b   = bubble ? 64'd0 : reg_b;
+wire [63:0] nxt_c   = bubble ? 64'd0 : reg_c;
+wire [63:0] nxt_imm = bubble ? 64'd0 : imm_ext;
+wire [63:0] nxt_pc4 = bubble ? 64'd0 : if_id_pc4;
+wire [63:0] nxt_sp  = bubble ? 64'd0 : sp_reg;
 
 /* ----------------------------------------------------------------
-   9. forwarding logic  (EX→EX  &  MEM→EX)
+   9. forwarding network (EX→EX and MEM→EX)
 -----------------------------------------------------------------*/
-wire fwd_a_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rs);
-wire fwd_a_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rs);
+wire fwd_a_ex  = ex_mem_we_reg && (ex_mem_rd != 0) && (ex_mem_rd == id_ex_rs);
+wire fwd_a_mem = mem_wb_we_reg && (mem_wb_rd != 0) && (mem_wb_rd == id_ex_rs);
 
-wire fwd_b_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rt);
-wire fwd_b_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rt);
+wire fwd_b_ex  = ex_mem_we_reg && (ex_mem_rd != 0) && (ex_mem_rd == id_ex_rt);
+wire fwd_b_mem = mem_wb_we_reg && (mem_wb_rd != 0) && (mem_wb_rd == id_ex_rt);
 
-wire fwd_c_ex  = ex_mem_we_reg  && (ex_mem_rd  != 0) && (ex_mem_rd  == id_ex_rd);
-wire fwd_c_mem = mem_wb_we_reg  && (mem_wb_rd  != 0) && (mem_wb_rd  == id_ex_rd);
+wire fwd_c_ex  = ex_mem_we_reg && (ex_mem_rd != 0) && (ex_mem_rd == id_ex_rd);
+wire fwd_c_mem = mem_wb_we_reg && (mem_wb_rd != 0) && (mem_wb_rd == id_ex_rd);
 
 wire [63:0] src_a_mux = fwd_a_ex  ? ex_mem_res :
                         fwd_a_mem ? mem_wb_res : id_ex_a;
@@ -329,19 +327,22 @@ wire [63:0] src_c_mux = fwd_c_ex  ? ex_mem_res :
                         fwd_c_mem ? mem_wb_res : id_ex_c;
 
 /* ----------------------------------------------------------------
-   10. execute stage (ALU)
+   10. execute (ALU)
 -----------------------------------------------------------------*/
 wire [63:0] alu_out, alu_addr, alu_npc;
-wire        alu_br,  alu_we_reg, alu_we_mem, alu_hlt;
+wire        alu_br, alu_we_reg, alu_we_mem, alu_hlt;
 
 alu alu_inst (
     .op(id_ex_op),
-    .src_a(src_a_mux), .src_b(src_b_mux), .src_c(src_c_mux),
+    .src_a(src_a_mux),
+    .src_b(src_b_mux),
+    .src_c(src_c_mux),
     .imm_ext(id_ex_imm),
     .pc_in(id_ex_pc4 - 64'd4),
     .sp_in(id_ex_sp),
     .mem_in(mem_rdata),
-    .alu_out(alu_out), .addr_out(alu_addr),
+    .alu_out(alu_out),
+    .addr_out(alu_addr),
     .pc_next(alu_npc),
     .take_branch(alu_br),
     .reg_we(alu_we_reg),
@@ -372,22 +373,28 @@ wire        nxt_mem_wb_hlt  = ex_mem_hlt;
 -----------------------------------------------------------------*/
 always @(posedge clk or posedge reset) begin
     if (reset) begin
+        /* pc */
         pc_reg <= 64'h2000;
 
-        if_id_ir  <= 32'd0;  if_id_pc4 <= 64'd0;
+        /* IF/ID */
+        if_id_ir  <= 32'd0;
+        if_id_pc4 <= 64'd0;
 
-        id_ex_op  <= BUBBLE_OP; id_ex_rd <= 0; id_ex_rs <= 0; id_ex_rt <= 0;
-        id_ex_a   <= 0; id_ex_b <= 0; id_ex_c <= 0;
+        /* ID/EX */
+        id_ex_op <= BUBBLE_OP; id_ex_rd <= 0; id_ex_rs <= 0; id_ex_rt <= 0;
+        id_ex_a  <= 0; id_ex_b <= 0; id_ex_c <= 0;
         id_ex_imm <= 0; id_ex_pc4 <= 0; id_ex_sp <= 0;
 
+        /* EX/MEM */
         ex_mem_op <= 0; ex_mem_rd <= 0; ex_mem_res <= 0; ex_mem_addr <= 0;
         ex_mem_npc <= 0; ex_mem_br <= 0; ex_mem_we_reg <= 0;
         ex_mem_we_mem <= 0; ex_mem_hlt <= 0;
 
+        /* MEM/WB */
         mem_wb_rd <= 0; mem_wb_res <= 0; mem_wb_we_reg <= 0; mem_wb_hlt <= 0;
 
     end else begin
-        /* pc */
+        /* pc update */
         if (flush_if)        pc_reg <= alu_npc;
         else if (!stall_if)  pc_reg <= pc_plus4;
 
