@@ -79,11 +79,17 @@ module ALU(
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
             5'b01101: begin  // return
+                // writeEnable      = 1'b0;
+                // mem_write_enable = 1'b0;
+                // changing_pc      = 1'b1;
+                // rw_addr          = r31_val - 8; // pop return address slot
+                // updated_next     = r_out;       // jump there
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
-                rw_addr          = r31_val - 8; // pop return address slot
-                updated_next     = r_out;       // jump there
+                rw_addr          = 32'd0;           // nuke any memory ops
+                updated_next     = pc + 64'd8;     // skip one instruction
+
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
