@@ -40,7 +40,7 @@ module ALU(
 
             // Data movement
             5'b10001: result = operand1;             // mov rd, rs
-            5'b10010: result = operand2;             // mov rd, L (literal)
+            5'b10010: result = {rdVal[63:12], operand2[11:0]};
             5'b10000: begin                          // load
                 rw_addr = operand1 + operand2;
                 result  = r_out;
@@ -75,12 +75,12 @@ module ALU(
                     updated_next = rdVal;
                 end
             end
-            5'b01101: begin // return
+            5'b01101: begin  // return
                 writeEnable      = 1'b0;
+                mem_write_enable = 1'b0;
                 changing_pc      = 1'b1;
-                mem_write_enable = 1'b1;
                 rw_addr          = r31_val - 8;
-                updated_next     = r_out;
+                updated_next     = r_out;  // ← must be available immediately
             end
             5'b01100: begin // call
                 writeEnable      = 1'b0;
@@ -151,18 +151,21 @@ endmodule
 
 module memory(
     input  wire [63:0] pc,
-    input  wire       clk,
-    input  wire       reset,
-    input  wire       mem_write_enable,
+    input  wire        clk,
+    input  wire        reset,
+    input  wire        mem_write_enable,
     input  wire [63:0] rw_val,
     input  wire [31:0] rw_addr,
     output wire [31:0] instruction,
     output wire [63:0] r_out
 );
     reg [7:0] bytes [524287:0];
+
+    // Combinational reads
     assign instruction = {bytes[pc+3], bytes[pc+2], bytes[pc+1], bytes[pc]};
     assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6], bytes[rw_addr+5], bytes[rw_addr+4],
                           bytes[rw_addr+3], bytes[rw_addr+2], bytes[rw_addr+1], bytes[rw_addr]};
+
     integer i;
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -180,6 +183,7 @@ module memory(
         end
     end
 endmodule
+
 
 module register_file(
     input  wire        clk,
@@ -215,39 +219,6 @@ module register_file(
         end
     end
 endmodule
-
-
-// module register_file(
-//     input  wire        clk,
-//     input  wire        reset,
-//     input  wire        write_enable,
-//     input  wire [63:0] dataInput,
-//     input  wire [4:0]  readAddress1,
-//     input  wire [4:0]  readAddress2,
-//     input  wire [4:0]  writeAddress,
-//     input  wire        lPassed,
-//     input  wire [11:0] L,
-//     output wire [63:0] value1,
-//     output wire [63:0] value2,
-//     output wire [63:0] rdVal,
-//     output wire [63:0] r31_val
-// );
-//     reg [63:0] registers [31:0];
-//     assign value1 = registers[readAddress1];
-//     assign value2 = lPassed ? {{52{L[11]}},L} : registers[readAddress2];
-//     assign rdVal  = registers[writeAddress];
-//     assign r31_val= registers[31];
-//     integer j;
-//     always @(posedge clk) begin
-//         if (reset) begin
-//             for (j = 0; j < 31; j = j + 1)
-//                 registers[j] <= 64'b0;
-//             registers[31] <= 64'h80000;
-//         end else if (write_enable) begin
-//             registers[writeAddress] <= dataInput;
-//         end
-//     end
-// endmodule
 
 module tinker_core(
     input  wire        clk,
