@@ -81,6 +81,7 @@ module ALU(
                 updated_next = ($signed(operand1) > $signed(operand2)) ? rdVal : pc + 4;
             end
 
+            // **Return**: skip exactly one instruction
             5'b01101: begin  // return
                 writeEnable      = 1'b0;
                 mem_write_enable = 1'b0;
@@ -222,302 +223,17 @@ module register_file(
     end
 endmodule
 
-// module tinker_core(
-//     input  wire        clk,
-//     input  wire        reset,
-//     output wire        hlt
-// );
-//     reg [63:0] PC;
-//     reg [1:0]  stall_cnt;
-//     reg [63:0] IF_ID_PC;
-//     reg [31:0] IF_ID_IR;
-
-//     wire [4:0]  IF_ctrl, IF_rd, IF_rs, IF_rt;
-//     wire [11:0] IF_L;
-//     wire        IF_rtPassed;
-//     instruction_decoder dec(
-//         .instruction (IF_ID_IR),
-//         .controlSignal(IF_ctrl),
-//         .rd           (IF_rd),
-//         .rs           (IF_rs),
-//         .rt           (IF_rt),
-//         .L            (IF_L),
-//         .rtPassed     (IF_rtPassed)
-//     );
-
-//     wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (
-//         (IF_ctrl != 5'b0 && EX_MEM_rd == IF_rs) ||
-//         (IF_ctrl != 5'b0 && EX_MEM_rd == IF_rt && IF_rtPassed)
-//     );
-
-//     reg [63:0] ID_EX_PC;
-//     reg [4:0]  ID_EX_ctrl, ID_EX_rd, ID_EX_rs, ID_EX_rt;
-//     reg [11:0] ID_EX_L;
-//     reg        ID_EX_rtPassed;
-//     reg [63:0] ID_EX_A, ID_EX_B;
-//     reg [63:0] ID_EX_r31, ID_EX_rdVal;
-
-//     reg [4:0]  EX_MEM_ctrl, EX_MEM_rd;
-//     reg [63:0] EX_MEM_ALU, EX_MEM_B;
-//     reg        EX_MEM_memWrite, EX_MEM_regWrite, EX_MEM_changePC;
-//     reg [31:0] EX_MEM_addr;
-//     reg [63:0] EX_MEM_wrData, EX_MEM_target;  // **EX_MEM_target now driven by ALU updated_next only**
-
-//     reg [4:0]  MEM_WB_ctrl, MEM_WB_rd;
-//     reg [63:0] MEM_WB_ALU, MEM_WB_memData;
-//     reg        MEM_WB_regWrite, MEM_WB_memToReg;
-
-//     wire [31:0] inst;
-//     wire [63:0] mem_rdata;
-//     memory memory(
-//         .pc              (PC),
-//         .clk             (clk),
-//         .reset           (reset),
-//         .mem_write_enable(EX_MEM_memWrite),
-//         .rw_val          (EX_MEM_wrData),
-//         .rw_addr         (EX_MEM_addr),
-//         .instruction     (inst),
-//         .r_out           (mem_rdata)
-//     );
-
-//     wire [63:0] regOut1, regOut2, rdVal, r31Val;
-//     register_file reg_file(
-//         .clk         (clk),
-//         .reset       (reset),
-//         .write_enable(MEM_WB_regWrite),
-//         .dataInput   (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU),
-//         .readAddress1(IF_rs),
-//         .readAddress2(IF_rt),
-//         .readAddress3(IF_rd),
-//         .writeAddress(MEM_WB_rd),
-//         .lPassed     (~IF_rtPassed),
-//         .L           (IF_L),
-//         .value1      (regOut1),
-//         .value2      (regOut2),
-//         .rdVal       (rdVal),
-//         .r31_val     (r31Val)
-//     );
-
-//     wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
-//         ? ID_EX_rdVal
-//         : (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
-//             ? EX_MEM_ALU
-//             : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
-//                 ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-//                 : ID_EX_A;
-
-//     wire [63:0] literal = {{52{ID_EX_L[11]}}, ID_EX_L};
-//     wire [63:0] aluOp2 = ID_EX_rtPassed
-//       ? ( (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt)
-//             ? EX_MEM_ALU
-//             : (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt)
-//                 ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-//                 : ID_EX_B )
-//       : literal;
-
-
-
-//     wire [63:0] aluResult, aluUpdatedNext;
-//     wire        aluRegWrite, aluMemWrite, aluChangePC;
-//     wire [31:0] aluAddr;
-//     wire [63:0] aluWrData;
-//     ALU ALU_INST(
-//         .pc               (ID_EX_PC),
-//         .rdVal            (ID_EX_rdVal),
-//         .operand1         (aluOp1),
-//         .operand2         (aluOp2),
-//         .opcode           (ID_EX_ctrl),
-//         .r_out            (mem_rdata),
-//         .r31_val          (ID_EX_r31),
-//         .result           (aluResult),
-//         .writeEnable      (aluRegWrite),
-//         .mem_write_enable (aluMemWrite),
-//         .rw_addr          (aluAddr),
-//         .rw_val           (aluWrData),
-//         .updated_next     (aluUpdatedNext),
-//         .changing_pc      (aluChangePC)
-//     );
-
-//     // IF stage
-//     always @(posedge clk or posedge reset) begin
-//         if (reset) begin
-//             PC        <= 64'h2000;
-//             stall_cnt <= 5;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (stall_cnt != 0) begin
-//             stall_cnt <= stall_cnt - 1;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (EX_MEM_changePC) begin
-//             PC        <= EX_MEM_target;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (load_use_hazard) begin
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 32'h00000000;  // NOP
-//         end else begin
-//             PC        <= PC + 4;
-//             IF_ID_PC  <= PC;
-//             IF_ID_IR  <= inst;
-//         end
-//     end
-
-//     // ID stage
-//     always @(posedge clk or posedge reset) begin
-//         if (reset || EX_MEM_changePC || stall_cnt != 0) begin
-//             ID_EX_ctrl     <= 0;
-//             ID_EX_rd       <= 0;
-//             ID_EX_rs       <= 0;
-//             ID_EX_rt       <= 0;
-//             ID_EX_L        <= 0;
-//             ID_EX_rtPassed <= 0;
-//             ID_EX_A        <= 0;
-//             ID_EX_B        <= 0;
-//             ID_EX_PC       <= 0;
-//             ID_EX_r31      <= 0;
-//             ID_EX_rdVal    <= 0;
-//         end else begin
-//             ID_EX_ctrl     <= IF_ctrl;
-//             ID_EX_rd       <= IF_rd;
-//             ID_EX_rs       <= IF_rs;
-//             ID_EX_rt       <= IF_rt;
-//             ID_EX_L        <= IF_L;
-//             ID_EX_rtPassed <= IF_rtPassed;
-//             ID_EX_A        <= regOut1;
-//             ID_EX_B        <= regOut2;
-//             ID_EX_PC       <= IF_ID_PC;
-//             ID_EX_r31      <= r31Val;
-//             ID_EX_rdVal    <= rdVal;
-//         end
-//     end
-
-//     // EX stage
-//     always @(posedge clk or posedge reset) begin
-//         if (reset) begin
-//             EX_MEM_ctrl     <= 0;
-//             EX_MEM_rd       <= 0;
-//             EX_MEM_ALU      <= 0;
-//             EX_MEM_B        <= 0;
-//             EX_MEM_memWrite <= 0;
-//             EX_MEM_regWrite <= 0;
-//             EX_MEM_addr     <= 0;
-//             EX_MEM_wrData   <= 0;
-//             EX_MEM_changePC <= 0;
-//             EX_MEM_target   <= 0;
-//         end else begin
-//             EX_MEM_ctrl     <= ID_EX_ctrl;
-//             EX_MEM_rd       <= ID_EX_rd;
-//             EX_MEM_ALU      <= aluResult;
-//             EX_MEM_B        <= ID_EX_B;
-//             EX_MEM_memWrite <= aluMemWrite;
-//             EX_MEM_regWrite <= aluRegWrite;
-//             EX_MEM_addr     <= aluAddr;
-//             EX_MEM_wrData   <= aluWrData;
-//             EX_MEM_changePC <= aluChangePC;
-//             EX_MEM_target   <= aluUpdatedNext;    
-//         end
-//     end
-
-//     // MEM stage
-//     always @(posedge clk or posedge reset) begin
-//         if (reset) begin
-//             MEM_WB_ctrl     <= 0;
-//             MEM_WB_rd       <= 0;
-//             MEM_WB_ALU      <= 0;
-//             MEM_WB_memData  <= 0;
-//             MEM_WB_regWrite <= 0;
-//             MEM_WB_memToReg <= 0;
-//         end else begin
-//             MEM_WB_ctrl     <= EX_MEM_ctrl;
-//             MEM_WB_rd       <= EX_MEM_rd;
-//             MEM_WB_ALU      <= EX_MEM_ALU;
-//             MEM_WB_memData  <= mem_rdata;
-//             MEM_WB_regWrite <= EX_MEM_regWrite;
-//             MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
-//         end
-//     end
-
-//     // // HALT logic
-//     // reg halt_flag;
-//     // always @(posedge clk or posedge reset) begin
-//     //     if (reset)
-//     //         halt_flag <= 0;
-//     //     else if (MEM_WB_ctrl == 5'h0f)
-//     //         halt_flag <= 1;
-//     // end
-//     // assign hlt = halt_flag;
-//     // Modified HALT logic with pipeline draining
-//     reg halt_detected;
-//     reg [2:0] drain_counter;
-//     reg halt_flag;
-
-//     always @(posedge clk or posedge reset) begin
-//         if (reset) begin
-//             halt_detected <= 0;
-//             drain_counter <= 0;
-//             halt_flag <= 0;
-//         end else if (ID_EX_ctrl == 5'h0f && !halt_detected) begin
-//             // Detect halt instruction in ID/EX stage
-//             halt_detected <= 1;
-//             drain_counter <= 3'd4; // Need 4 cycles to drain the pipeline
-//         end else if (halt_detected && drain_counter > 0) begin
-//             // Count down until pipeline is drained
-//             drain_counter <= drain_counter - 1;
-//         end else if (halt_detected && drain_counter == 0) begin
-//             // All instructions have completed, now set the halt flag
-//             halt_flag <= 1;
-//         end
-//     end
-
-//     // Modify the IF stage to stop fetching new instructions when halt is detected
-//     always @(posedge clk or posedge reset) begin
-//         if (reset) begin
-//             PC        <= 64'h2000;
-//             stall_cnt <= 5;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (stall_cnt != 0) begin
-//             stall_cnt <= stall_cnt - 1;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (halt_detected && !halt_flag) begin
-//             // When halt is detected but not yet flagged, stop fetching new instructions
-//             // but allow pipeline to continue processing existing instructions
-//             IF_ID_PC  <= IF_ID_PC;
-//             IF_ID_IR  <= IF_ID_IR;
-//         end else if (EX_MEM_changePC) begin
-//             PC        <= EX_MEM_target;
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 0;
-//         end else if (load_use_hazard) begin
-//             IF_ID_PC  <= 0;
-//             IF_ID_IR  <= 32'h00000000;  // NOP
-//         end else begin
-//             PC        <= PC + 4;
-//             IF_ID_PC  <= PC;
-//             IF_ID_IR  <= inst;
-//         end
-//     end
-
-//     assign hlt = halt_flag;
-
-// endmodule
-
 module tinker_core(
     input  wire        clk,
     input  wire        reset,
     output wire        hlt
 );
-    // --------------------------------------------------
-    // Pipeline registers
-    // --------------------------------------------------
     reg [63:0] PC;
-    reg [2:0]  stall_cnt;
+    reg [1:0]  stall_cnt;
+
     reg [63:0] IF_ID_PC;
     reg [31:0] IF_ID_IR;
 
-    // Decoded fields in IF/ID
     wire [4:0]  IF_ctrl, IF_rd, IF_rs, IF_rt;
     wire [11:0] IF_L;
     wire        IF_rtPassed;
@@ -531,11 +247,11 @@ module tinker_core(
         .rtPassed     (IF_rtPassed)
     );
 
-    // Load‑use hazard detection
-    wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) &&
-        ((EX_MEM_rd == IF_rs) || (EX_MEM_rd == IF_rt && IF_rtPassed));
+    wire load_use_hazard = (EX_MEM_ctrl == 5'b10000) && (
+        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rs) ||
+        (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
+    );
 
-    // ID/EX pipeline regs
     reg [63:0] ID_EX_PC;
     reg [4:0]  ID_EX_ctrl, ID_EX_rd, ID_EX_rs, ID_EX_rt;
     reg [11:0] ID_EX_L;
@@ -543,22 +259,16 @@ module tinker_core(
     reg [63:0] ID_EX_A, ID_EX_B;
     reg [63:0] ID_EX_r31, ID_EX_rdVal;
 
-    // EX/MEM pipeline regs
     reg [4:0]  EX_MEM_ctrl, EX_MEM_rd;
     reg [63:0] EX_MEM_ALU, EX_MEM_B;
     reg        EX_MEM_memWrite, EX_MEM_regWrite, EX_MEM_changePC;
     reg [31:0] EX_MEM_addr;
     reg [63:0] EX_MEM_wrData, EX_MEM_target;
 
-    // MEM/WB pipeline regs
     reg [4:0]  MEM_WB_ctrl, MEM_WB_rd;
     reg [63:0] MEM_WB_ALU, MEM_WB_memData;
     reg        MEM_WB_regWrite, MEM_WB_memToReg;
 
-
-    // --------------------------------------------------
-    // Memory stage
-    // --------------------------------------------------
     wire [31:0] inst;
     wire [63:0] mem_rdata;
     memory memory(
@@ -572,9 +282,6 @@ module tinker_core(
         .r_out            (mem_rdata)
     );
 
-    // --------------------------------------------------
-    // Register file stage
-    // --------------------------------------------------
     wire [63:0] regOut1, regOut2, rdValSignal, r31Val;
     register_file reg_file(
         .clk         (clk),
@@ -593,54 +300,29 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
-    // --------------------------------------------------
-    // Forwarding logic (EX→EX then MEM→EX)
-    // --------------------------------------------------
-    // wire [63:0] ex_forward_A = 
-    //     (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
-    //     ? EX_MEM_ALU : ID_EX_A;
-    // wire [63:0] mem_forward_A =
-    //     (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
-    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-    //     : ex_forward_A;
-    // wire [63:0] aluOp1 = 
-    //     (ID_EX_ctrl==5'b11001 || ID_EX_ctrl==5'b11011)
-    //     ? ID_EX_rdVal : mem_forward_A;
-
-    // wire [63:0] ex_forward_B = 
-    //     (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt && ID_EX_rtPassed)
-    //     ? EX_MEM_ALU : ID_EX_B;
-    // wire [63:0] mem_forward_B =
-    //     (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt && ID_EX_rtPassed)
-    //     ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-    //     : ex_forward_B;
-    // wire [63:0] aluOp2 =
-    //     ID_EX_rtPassed 
-    //     ? mem_forward_B 
-    //     : {{52{ID_EX_L[11]}}, ID_EX_L};
-    wire [63:0] aluOp1 = 
-        (ID_EX_ctrl==5'b11001 || ID_EX_ctrl==5'b11011)
-        ? ID_EX_rdVal : 
-        (EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rs)
-        ? EX_MEM_ALU :
-        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rs)
+    wire [63:0] ex_forward_A =
+        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rs)
+        ? EX_MEM_ALU : ID_EX_A;
+    wire [63:0] mem_forward_A =
+        (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rs)
         ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-        : ID_EX_A;
+        : ex_forward_A;
+    wire [63:0] aluOp1 =
+        (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
+        ? ID_EX_rdVal : mem_forward_A;
 
-    wire [63:0] aluOp2 =
-        ID_EX_rtPassed 
-        ? ((EX_MEM_regWrite && EX_MEM_rd!=0 && EX_MEM_rd==ID_EX_rt)
-        ? EX_MEM_ALU :
-        (MEM_WB_regWrite && MEM_WB_rd!=0 && MEM_WB_rd==ID_EX_rt)
+    // RT forwarding
+    wire [63:0] ex_forward_B =
+        (EX_MEM_regWrite && EX_MEM_rd != 0 && EX_MEM_rd == ID_EX_rt && ID_EX_rtPassed)
+        ? EX_MEM_ALU : ID_EX_B;
+    wire [63:0] mem_forward_B =
+        (MEM_WB_regWrite && MEM_WB_rd != 0 && MEM_WB_rd == ID_EX_rt && ID_EX_rtPassed)
         ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU)
-        : ID_EX_B)
+        : ex_forward_B;
+    wire [63:0] aluOp2 = ID_EX_rtPassed
+        ? mem_forward_B
         : {{52{ID_EX_L[11]}}, ID_EX_L};
 
-
-
-    // --------------------------------------------------
-    // ALU instantiation
-    // --------------------------------------------------
     wire [63:0] aluResult, aluUpdatedNext;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
     wire [31:0] aluAddr;
@@ -662,14 +344,10 @@ module tinker_core(
         .changing_pc      (aluChangePC)
     );
 
-
-    // --------------------------------------------------
-    // IF stage
-    // --------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC        <= 64'h2000;
-            stall_cnt <= 3'd5;
+            stall_cnt <= 5;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
         end else if (stall_cnt != 0) begin
@@ -690,9 +368,6 @@ module tinker_core(
         end
     end
 
-    // --------------------------------------------------
-    // ID stage
-    // --------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset || EX_MEM_changePC || stall_cnt != 0) begin
             ID_EX_ctrl     <= 0;
@@ -711,7 +386,7 @@ module tinker_core(
             ID_EX_rd       <= IF_rd;
             ID_EX_rs       <= IF_rs;
             ID_EX_rt       <= IF_rt;
-            ID_EX_L        <= IF_L;
+           	ID_EX_L        <= IF_L;
             ID_EX_rtPassed <= IF_rtPassed;
             ID_EX_A        <= regOut1;
             ID_EX_B        <= regOut2;
@@ -721,9 +396,6 @@ module tinker_core(
         end
     end
 
-    // --------------------------------------------------
-    // EX stage (with RETURN override)
-    // --------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             EX_MEM_ctrl     <= 0;
@@ -738,15 +410,7 @@ module tinker_core(
             EX_MEM_target   <= 0;
         end else begin
             EX_MEM_ctrl     <= ID_EX_ctrl;
-            // **Override write‐back reg for RETURN→R31**
-            if (ID_EX_ctrl == 5'b01101) begin
-            // For return instruction, update r31 with r31-8
-                EX_MEM_rd <= 5'd31;
-                EX_MEM_ALU <= ID_EX_r31 - 8;
-            end else begin
-                EX_MEM_rd <= ID_EX_rd;
-            end
-
+            EX_MEM_rd       <= ID_EX_rd;
             EX_MEM_ALU      <= aluResult;
             EX_MEM_B        <= ID_EX_B;
             EX_MEM_memWrite <= aluMemWrite;
@@ -758,9 +422,6 @@ module tinker_core(
         end
     end
 
-    // --------------------------------------------------
-    // MEM stage
-    // --------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             MEM_WB_ctrl     <= 0;
@@ -779,15 +440,12 @@ module tinker_core(
         end
     end
 
-    // --------------------------------------------------
-    // HALT detection
-    // --------------------------------------------------
     reg halt_flag;
     always @(posedge clk or posedge reset) begin
-        if (reset)            halt_flag <= 0;
-        else if (MEM_WB_ctrl==5'b01111)  // halt opcode = 0x0F
+        if (reset)
+            halt_flag <= 0;
+        else if (MEM_WB_ctrl == 5'b01111)  // HALT opcode = 0x0F
             halt_flag <= 1;
     end
     assign hlt = halt_flag;
-
 endmodule
