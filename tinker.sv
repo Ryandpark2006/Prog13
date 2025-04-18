@@ -1,30 +1,238 @@
-/* =============================================================
-   Patched Tinker System-on‑Chip — **instance‑name hot‑fix**
-   --------------------------------------------------------------
-   Aligns internal instance names & array identifiers with the
-   autograder’s hierarchical probes:
-     • tinker_core now instantiates `memory`   (not `MEM`)
-     • tinker_core now instantiates `reg_file` (not `RF`)
-     • Internal arrays renamed back to `bytes` and `registers`
-   --------------------------------------------------------------*/
+module tinker_core (
+    input  wire clk,
+    input  wire reset,
+    output wire hlt
+);
 
-// ===================== 1. ALU ================================
-module ALU(
-    input  wire [4:0]  opcode,
-    input  wire [63:0] inputDataOne,
-    input  wire [63:0] inputDataTwo,
-    input  wire [63:0] inputDataThree,
-    input  wire [63:0] signExtendedLiteral,
-    input  wire [63:0] programCounter,
-    input  wire [63:0] stackPointer,
-    input  wire [63:0] readMemory,
-    output reg  [63:0] result,
-    output reg  [63:0] readWriteAddress,
-    output reg  [63:0] newProgramCounter,
-    output reg         branchTaken,
-    output reg         writeToRegister,
-    output reg         writeToMemory,
-    output reg         hlt
+/* ================================================================
+   0. Program Counter & FETCH ------------------------------------*/
+reg  [63:0] programCounter;
+wire [63:0] pcPlus4 = programCounter + 64'd4;
+
+/* --------------------------------------------------  Flush / Stall */
+wire fetchStall;            // RAW‑hazard detector output
+/*  ►► FIX ◄◄  flush as soon as ALU resolves a branch */
+wire flushFetch = aluBranchTaken;   // use ALU’s combinational flag
+
+/* ================================================================
+   1. IF / ID  ----------------------------------------------------*/
+reg  [31:0] fetchToDecodeInstr;
+reg  [63:0] fetchToDecodePCPlus4;
+
+/* ================================================================
+   2. ID / EX  ----------------------------------------------------*/
+reg  [4:0]  decoderToAluOpcode, decoderToAluRd, decoderToAluRs, decoderToAluRt;
+reg  [63:0] decoderToAluData1,  decoderToAluData2,  decoderToAluData3;
+reg  [63:0] decoderToAluSignExtLit, decoderToAluPCPlus4, decoderToAluStackPtr;
+
+/* ================================================================
+   3. EX / MEM  ---------------------------------------------------*/
+reg  [4:0]  aluToMemRd;
+reg  [63:0] aluToMemResult, aluToMemAddr, aluToMemNewPC;
+reg         aluToMemBranchTaken, aluToMemWriteToReg, aluToMemWriteToMem, aluToMemHlt;
+
+/* ================================================================
+   4. MEM / WB  ---------------------------------------------------*/
+reg  [4:0]  memToWritebackRd;
+reg  [63:0] memToWritebackResult;
+reg         memToWritebackWriteReg, memToWritebackHlt;
+
+assign hlt = memToWritebackHlt;
+
+/* ================================================================
+   5. Instruction / Data Memory ----------------------------------*/
+wire [31:0] fetchedInstr;
+wire [63:0] memoryReadData;
+
+memory memory (
+    .clk            (clk),
+    .programCounter (programCounter),
+    .dataAddress    (aluAddr),
+    .writeEnable    (aluWriteMem),
+    .writeData      (aluResult),
+    .readInstruction(fetchedInstr),
+    .readData       (memoryReadData)
+);
+
+/* ================================================================
+   6. Decode stage wiring ----------------------------------------*/
+wire [4:0] opcode, rd, rs, rt;  wire [11:0] l;
+
+decoder dec_inst (.instruction(fetchToDecodeInstr),
+                  .opcode(opcode), .rd(rd), .rs(rs), .rt(rt), .l(l));
+
+wire [63:0] signExtLiteral = {{52{l[11]}}, l};
+
+/* ---------- Register file -------------------------------------*/
+wire [63:0] regData1, regData2, regData3, stackPtr;
+
+registers reg_file (
+    .clk(clk), .reset(reset),
+    .write(memToWritebackWriteReg),
+    .data_input(memToWritebackResult),
+    .registerOne(rs), .registerTwo(rt), .registerThree(rd),
+    .writeAddress(memToWritebackRd),
+    .data_outputOne(regData1), .data_outputTwo(regData2),
+    .data_outputThree(regData3), .stackPointer(stackPtr));
+
+/* ================================================================
+   7. RAW‑hazard detector (Decode) -------------------------------*/
+/* Does the ID/EX instruction write a register? */
+wire idExWriteReg = (decoderToAluOpcode != 5'h1F) &&           // not a bubble
+                    (decoderToAluOpcode != 5'h08) &&           // br
+                    (decoderToAluOpcode != 5'h09) &&           // brr rd
+                    (decoderToAluOpcode != 5'h0a) &&           // brr L
+                    (decoderToAluOpcode != 5'h0b) &&           // brnz
+                    (decoderToAluOpcode != 5'h0c) &&           // call
+                    (decoderToAluOpcode != 5'h0d) &&           // return
+                    (decoderToAluOpcode != 5'h0e) &&           // brgt
+                    (decoderToAluOpcode != 5'h0f) &&           // halt/priv
+                    (decoderToAluOpcode != 5'h13);             // store
+
+wire hazardIDEX = idExWriteReg &&
+                  ((decoderToAluRd == rs) || (decoderToAluRd == rt) || (decoderToAluRd == rd));
+
+wire hazardEX  = aluToMemWriteToReg &&
+                 ((aluToMemRd == rs) || (aluToMemRd == rt) || (aluToMemRd == rd));
+
+wire hazardMEM = memToWritebackWriteReg &&
+                 ((memToWritebackRd == rs) || (memToWritebackRd == rt) || (memToWritebackRd == rd));
+
+assign fetchStall = hazardIDEX | hazardEX | hazardMEM;
+
+/* ================================================================
+   8. IF/ID & ID/EX next‑state calc ------------------------------*/
+wire [31:0] nextFetchInstr   = flushFetch ? 32'd0 :
+                               fetchStall ? fetchToDecodeInstr : fetchedInstr;
+wire [63:0] nextFetchPCPlus4 = flushFetch ? 64'd0 :
+                               fetchStall ? fetchToDecodePCPlus4 : pcPlus4;
+
+localparam [4:0] BUBBLE_OP = 5'h1F;  wire bubble = flushFetch|fetchStall;
+
+wire [4:0]  nextOpcode     = bubble ? BUBBLE_OP : opcode;
+wire [4:0]  nextRd         = bubble ? 5'd0      : rd;
+wire [4:0]  nextRs         = bubble ? 5'd0      : rs;
+wire [4:0]  nextRt         = bubble ? 5'd0      : rt;
+
+wire [63:0] nextData1      = bubble ? 64'd0 : regData1;
+wire [63:0] nextData2      = bubble ? 64'd0 : regData2;
+wire [63:0] nextData3      = bubble ? 64'd0 : regData3;
+wire [63:0] nextSignExtLit = bubble ? 64'd0 : signExtLiteral;
+wire [63:0] nextPCPlus4ID  = bubble ? 64'd0 : fetchToDecodePCPlus4;
+wire [63:0] nextStackPtr   = bubble ? 64'd0 : stackPtr;
+
+/* ================================================================
+   9. Execute stage (ALU) ----------------------------------------*/
+wire [63:0] aluResult, aluAddr, aluNewPC;
+wire        aluBranchTaken, aluWriteReg, aluWriteMem, aluHalt;
+
+alu alu_inst (
+    .opcode(decoderToAluOpcode),
+    .inputDataOne(decoderToAluData1), .inputDataTwo(decoderToAluData2),
+    .inputDataThree(decoderToAluData3),
+    .signExtendedLiteral(decoderToAluSignExtLit),
+    .programCounter(decoderToAluPCPlus4 - 64'd4),
+    .stackPointer(decoderToAluStackPtr),
+    .readMemory(memoryReadData),
+    .result(aluResult), .readWriteAddress(aluAddr),
+    .newProgramCounter(aluNewPC),
+    .branchTaken(aluBranchTaken),
+    .writeToRegister(aluWriteReg),
+    .writeToMemory(aluWriteMem),
+    .hlt(aluHalt));
+
+/* EX/MEM next values -------------------------------------------*/
+wire [4:0]  nextAluToMemRd          = decoderToAluRd;
+wire [63:0] nextAluToMemResult      = aluResult;
+wire [63:0] nextAluToMemAddr        = aluAddr;
+wire [63:0] nextAluToMemNewPC       = aluNewPC;
+wire        nextAluToMemBranchTaken = aluBranchTaken;
+wire        nextAluToMemWriteReg    = aluWriteReg;
+wire        nextAluToMemWriteMem    = aluWriteMem;
+wire        nextAluToMemHlt         = aluHalt;
+
+/* ================================================================
+   10. MEM stage forwarding --------------------------------------*/
+wire [4:0]  nextMemToWB_Rd        = aluToMemRd;
+wire [63:0] nextMemToWB_Result    = aluToMemResult;
+wire        nextMemToWB_WriteReg  = aluToMemWriteToReg;
+wire        nextMemToWB_Hlt       = aluToMemHlt;
+
+/* ================================================================
+   11. Sequential logic ------------------------------------------*/
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        programCounter <= 64'h2000;
+        fetchToDecodeInstr <= 32'd0; fetchToDecodePCPlus4 <= 64'd0;
+
+        decoderToAluOpcode <= BUBBLE_OP; decoderToAluRd <= 0;
+        decoderToAluRs <= 0; decoderToAluRt <= 0;
+        decoderToAluData1 <= 0; decoderToAluData2 <= 0; decoderToAluData3 <= 0;
+        decoderToAluSignExtLit <= 0; decoderToAluPCPlus4 <= 0; decoderToAluStackPtr <= 0;
+
+        aluToMemRd <= 0; aluToMemResult <= 0; aluToMemAddr <= 0; aluToMemNewPC <= 0;
+        aluToMemBranchTaken <= 0; aluToMemWriteToReg <= 0; aluToMemWriteToMem <= 0; aluToMemHlt <= 0;
+
+        memToWritebackRd <= 0; memToWritebackResult <= 0;
+        memToWritebackWriteReg <= 0; memToWritebackHlt <= 0;
+    end else begin
+        /* PC update */
+        if (flushFetch)          programCounter <= aluNewPC;
+        else if (!fetchStall)    programCounter <= pcPlus4;
+
+        /* IF/ID */
+        fetchToDecodeInstr   <= nextFetchInstr;
+        fetchToDecodePCPlus4 <= nextFetchPCPlus4;
+
+        /* ID/EX */
+        decoderToAluOpcode     <= nextOpcode;
+        decoderToAluRd         <= nextRd;
+        decoderToAluRs         <= nextRs;
+        decoderToAluRt         <= nextRt;
+        decoderToAluData1      <= nextData1;
+        decoderToAluData2      <= nextData2;
+        decoderToAluData3      <= nextData3;
+        decoderToAluSignExtLit <= nextSignExtLit;
+        decoderToAluPCPlus4    <= nextPCPlus4ID;
+        decoderToAluStackPtr   <= nextStackPtr;
+
+        /* EX/MEM */
+        aluToMemRd              <= nextAluToMemRd;
+        aluToMemResult          <= nextAluToMemResult;
+        aluToMemAddr            <= nextAluToMemAddr;
+        aluToMemNewPC           <= nextAluToMemNewPC;
+        aluToMemBranchTaken     <= nextAluToMemBranchTaken;
+        aluToMemWriteToReg      <= nextAluToMemWriteReg;
+        aluToMemWriteToMem      <= nextAluToMemWriteMem;
+        aluToMemHlt             <= nextAluToMemHlt;
+
+        /* MEM/WB */
+        memToWritebackRd        <= nextMemToWB_Rd;
+        memToWritebackResult    <= nextMemToWB_Result;
+        memToWritebackWriteReg  <= nextMemToWB_WriteReg;
+        memToWritebackHlt       <= nextMemToWB_Hlt;
+    end
+end
+
+endmodule
+
+
+module alu(
+    input  [4:0]  opcode,
+    input  [63:0] inputDataOne,
+    input  [63:0] inputDataTwo,
+    input  [63:0] inputDataThree,
+    input  [63:0] signExtendedLiteral,
+    input  [63:0] programCounter,
+    input  [63:0] stackPointer,
+    input  [63:0] readMemory,
+    output reg [63:0] result,
+    output reg [63:0] readWriteAddress,
+    output reg [63:0] newProgramCounter,
+    output reg       branchTaken,
+    output reg       writeToRegister,
+    output reg       writeToMemory,
+    output reg       hlt
 );
     always @(*) begin
         result            = 64'd0;
@@ -35,382 +243,166 @@ module ALU(
         branchTaken       = 1'b0;
         hlt               = 1'b0;
         case (opcode)
-            5'h00: result = inputDataOne &  inputDataTwo;
-            5'h01: result = inputDataOne |  inputDataTwo;
-            5'h02: result = inputDataOne ^  inputDataTwo;
-            5'h03: result = ~inputDataOne;
-            5'h04: result = inputDataOne >> inputDataTwo[5:0];
-            5'h05: result = inputDataThree >> signExtendedLiteral;
-            5'h06: result = inputDataOne << inputDataTwo[5:0];
-            5'h07: result = inputDataThree << signExtendedLiteral;
-            5'h08: begin branchTaken = 1; writeToRegister = 0; newProgramCounter = inputDataThree; end
-            5'h09: begin branchTaken = 1; writeToRegister = 0; newProgramCounter = programCounter + inputDataThree; end
-            5'h0a: begin branchTaken = 1; writeToRegister = 0; newProgramCounter = programCounter + signExtendedLiteral; end
-            5'h0b: begin writeToRegister = 0; if (inputDataOne != 0) begin newProgramCounter = inputDataThree; branchTaken = 1; end end
-            5'h0c: begin writeToRegister = 0; writeToMemory = 1; branchTaken = 1; newProgramCounter = inputDataThree; readWriteAddress = stackPointer - 64'd8; result = programCounter + 64'd4; end
-            5'h0d: begin writeToRegister = 0; branchTaken = 1; readWriteAddress = stackPointer - 64'd8; newProgramCounter = readMemory; end
-            5'h0e: begin writeToRegister = 0; if ($signed(inputDataOne) > $signed(inputDataTwo)) begin newProgramCounter = inputDataThree; branchTaken = 1; end end
-            5'h0f: begin writeToRegister = 0; if (signExtendedLiteral[3:0] == 4'h0) hlt = 1; end
-            5'h10: begin readWriteAddress = inputDataOne + signExtendedLiteral; result = readMemory; end
-            5'h11: result = inputDataOne;
-            5'h12: result = {inputDataThree[63:12], signExtendedLiteral[11:0]};
-            5'h13: begin writeToRegister = 0; writeToMemory = 1; readWriteAddress = inputDataThree + signExtendedLiteral; result = inputDataOne; end
-            5'h14: result = $realtobits($bitstoreal(inputDataOne) + $bitstoreal(inputDataTwo));
-            5'h15: result = $realtobits($bitstoreal(inputDataOne) - $bitstoreal(inputDataTwo));
-            5'h16: result = $realtobits($bitstoreal(inputDataOne) * $bitstoreal(inputDataTwo));
-            5'h17: result = $realtobits($bitstoreal(inputDataOne) / $bitstoreal(inputDataTwo));
-            5'h18: result = inputDataOne + inputDataTwo;
-            5'h19: result = inputDataThree + signExtendedLiteral;
-            5'h1a: result = inputDataOne - inputDataTwo;
-            5'h1b: result = inputDataThree - signExtendedLiteral;
-            5'h1c: result = inputDataOne * inputDataTwo;
-            5'h1d: result = (inputDataTwo == 0) ? 64'd0 : (inputDataOne / inputDataTwo);
-            default: begin writeToRegister = 0; writeToMemory = 0; branchTaken = 0; end
+            5'h00: result = inputDataOne & inputDataTwo;                       // and
+            5'h01: result = inputDataOne | inputDataTwo;                       // or
+            5'h02: result = inputDataOne ^ inputDataTwo;                       // xor
+            5'h03: result = ~inputDataOne;                                      // not
+            5'h04: result = inputDataOne >> inputDataTwo[5:0];                 // shftr
+            5'h05: result = inputDataThree >> signExtendedLiteral;             // shftri
+            5'h06: result = inputDataOne << inputDataTwo[5:0];                 // shftl
+            5'h07: result = inputDataThree << signExtendedLiteral;             // shftli
+            5'h08: begin                                                       // br
+                branchTaken     = 1;
+                writeToRegister = 0;
+                newProgramCounter = inputDataThree;
+            end
+            5'h09: begin                                                       // brr rd
+                branchTaken     = 1;
+                writeToRegister = 0;
+                newProgramCounter = programCounter + inputDataThree;
+            end
+            5'h0a: begin                                                       // brr L
+                branchTaken     = 1;
+                writeToRegister = 0;
+                newProgramCounter = programCounter + signExtendedLiteral;
+            end
+            5'h0b: begin                                                       // brnz
+                writeToRegister = 0;
+                if (inputDataOne != 0) begin
+                    newProgramCounter = inputDataThree;
+                    branchTaken       = 1;
+                end
+            end
+            5'h0c: begin                                                       // call
+                writeToRegister = 0;
+                writeToMemory   = 1;
+                branchTaken     = 1;
+                newProgramCounter = inputDataThree;
+                readWriteAddress  = stackPointer - 64'd8;
+                result            = programCounter + 64'd4;
+            end
+            5'h0d: begin                                                       // return
+                writeToRegister = 0;
+                branchTaken     = 1;
+                readWriteAddress  = stackPointer - 64'd8;
+                newProgramCounter = readMemory;
+            end
+            5'h0e: begin                                                       // brgt
+                writeToRegister = 0;
+                if ($signed(inputDataOne) > $signed(inputDataTwo)) begin
+                    newProgramCounter = inputDataThree;
+                    branchTaken       = 1;
+                end
+            end
+            5'h0f: begin                                                       // halt/priv
+                writeToRegister = 0;
+                if (signExtendedLiteral[3:0] == 4'h0) hlt = 1;
+            end
+            5'h10: begin                                                       // load
+                readWriteAddress = inputDataOne + signExtendedLiteral;
+                result           = readMemory;
+            end
+            5'h11: result = inputDataOne;                                      // mov_reg_to_reg
+            5'h12: result = {inputDataThree[63:12], signExtendedLiteral[11:0]}; // mov_L_to_reg (upper)
+            5'h13: begin                                                       // store
+                writeToRegister = 0;
+                writeToMemory   = 1;
+                readWriteAddress = inputDataThree + signExtendedLiteral;
+                result          = inputDataOne;
+            end
+            5'h14: result = $realtobits($bitstoreal(inputDataOne) + $bitstoreal(inputDataTwo)); // addf
+            5'h15: result = $realtobits($bitstoreal(inputDataOne) - $bitstoreal(inputDataTwo)); // subf
+            5'h16: result = $realtobits($bitstoreal(inputDataOne) * $bitstoreal(inputDataTwo)); // mulf
+            5'h17: result = $realtobits($bitstoreal(inputDataOne) / $bitstoreal(inputDataTwo)); // divf
+            5'h18: result = inputDataOne + inputDataTwo;                        // add
+            5'h19: result = inputDataThree + signExtendedLiteral;               // addi
+            5'h1a: result = inputDataOne - inputDataTwo;                        // sub
+            5'h1b: result = inputDataThree - signExtendedLiteral;               // subi
+            5'h1c: result = inputDataOne * inputDataTwo;                        // mul
+            5'h1d: result = (inputDataTwo == 0) ? 64'd0 : (inputDataOne / inputDataTwo); // div
+            default: begin
+                writeToRegister = 0;
+                writeToMemory   = 0;
+                branchTaken     = 0;
+            end
         endcase
     end
 endmodule
 
-// ===================== 2. Instruction Decoder ===============
-// ===================== 2. Instruction Decoder ===============
-module instruction_decoder(
-    input  wire [31:0] instruction,
-    output wire [4:0]  controlSignal,
-    output wire [4:0]  rd,
-    output wire [4:0]  rs,
-    output wire [4:0]  rt,
-    output wire [11:0] L,
-    output wire        rtPassed
+
+module registers(
+    input        clk,
+    input        reset,
+    input        write,
+    input  [63:0] data_input,
+    input  [4:0]  registerOne,
+    input  [4:0]  registerTwo,
+    input  [4:0]  registerThree,
+    input  [4:0]  writeAddress,
+    output [63:0] data_outputOne,
+    output [63:0] data_outputTwo,
+    output [63:0] data_outputThree,
+    output [63:0] stackPointer
 );
-    assign controlSignal = instruction[31:27];
-    assign rd            = instruction[26:22];
-    assign rs            = instruction[21:17];
-    assign rt            = instruction[16:12];
-    assign L             = instruction[11:0];
+    reg [63:0] registers [0:31];
 
-    // Immediate‑style operations do NOT read rt
-    assign rtPassed = !(controlSignal == 5'h19 ||  // addi
-                         controlSignal == 5'h1b ||  // subi
-                         controlSignal == 5'h05 ||  // shftri
-                         controlSignal == 5'h07 ||  // shftli
-                         controlSignal == 5'h10 ||  // load
-                         controlSignal == 5'h0a ||  // brr L
-                         controlSignal == 5'h13 ||  // store
-                         controlSignal == 5'h00 );  // andl (literal form)
-endmodule
-
-// ===================== 3. Register File =====================
-// ===================== 3. Register File =====================
-module register_file(
-    input  wire        clk,
-    input  wire        reset,
-    input  wire        write_enable,
-    input  wire [63:0] dataInput,
-    input  wire [4:0]  readAddress1,
-    input  wire [4:0]  readAddress2,
-    input  wire [4:0]  readAddress3,
-    input  wire [4:0]  writeAddress,
-    input  wire        lPassed,
-    input  wire [11:0] L,
-    output wire [63:0] value1,
-    output wire [63:0] value2,
-    output wire [63:0] rdVal,
-    output wire [63:0] r31_val
-);
-    /*  Descending index order restored for autograder scope  */
-    reg [63:0] registers [31:0];
-
-    assign value1  = registers[readAddress1];
-    assign value2  = lPassed ? {{52{L[11]}},L} : registers[readAddress2];
-    assign rdVal   = registers[readAddress3];
-    assign r31_val = registers[31];
+    assign data_outputOne   = registers[registerOne];
+    assign data_outputTwo   = registers[registerTwo];
+    assign data_outputThree = registers[registerThree];
+    assign stackPointer     = registers[31];
 
     integer i;
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             for (i = 0; i < 31; i = i + 1) registers[i] <= 64'd0;
             registers[31] <= 64'd524288;
-        end else if (write_enable && writeAddress != 5'd0) begin
-            registers[writeAddress] <= dataInput;
+        end else if (write) begin
+            registers[writeAddress] <= data_input;
         end
     end
 endmodule
 
-// ===================== 4. Unified Memory ====================
-// ===================== 4. Unified Memory ====================
+
 module memory(
-    input  wire        clk,
-    input  wire [63:0] pc,
-    input  wire        reset,
-    input  wire        mem_write_enable,
-    input  wire [63:0] rw_val,
-    input  wire [31:0] rw_addr,
-    output wire [31:0] instruction,
-    output wire [63:0] r_out
+    input        clk,
+    input  [63:0] programCounter,
+    input  [63:0] dataAddress,
+    input        writeEnable,
+    input  [63:0] writeData,
+    output [31:0] readInstruction,
+    output [63:0] readData
 );
-    /*  NOTE:  Back to descending index order so autograder’s
-        hierarchical reference  bytes[index]  resolves.      */
-    reg [7:0] bytes [524287:0];
+    reg [7:0] bytes [0:524287];   // 512 KiB for both instructions & data
 
-    assign instruction = {bytes[pc+3], bytes[pc+2], bytes[pc+1], bytes[pc]};
-    assign r_out       = {bytes[rw_addr+7], bytes[rw_addr+6], bytes[rw_addr+5], bytes[rw_addr+4],
-                          bytes[rw_addr+3], bytes[rw_addr+2], bytes[rw_addr+1], bytes[rw_addr]};
+    assign readInstruction = {bytes[programCounter+3], bytes[programCounter+2],
+                              bytes[programCounter+1], bytes[programCounter]};
 
-    integer k;
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            for (k = 0; k < 524288; k = k + 1) bytes[k] <= 8'd0;
-        end else if (mem_write_enable) begin
-            {bytes[rw_addr+7], bytes[rw_addr+6], bytes[rw_addr+5], bytes[rw_addr+4],
-             bytes[rw_addr+3], bytes[rw_addr+2], bytes[rw_addr+1], bytes[rw_addr  ]} <= rw_val;
+    assign readData = {bytes[dataAddress+7], bytes[dataAddress+6],
+                       bytes[dataAddress+5], bytes[dataAddress+4],
+                       bytes[dataAddress+3], bytes[dataAddress+2],
+                       bytes[dataAddress+1], bytes[dataAddress]};
+
+    always @(posedge clk) begin
+        if (writeEnable) begin
+            {bytes[dataAddress+7], bytes[dataAddress+6], bytes[dataAddress+5],
+             bytes[dataAddress+4], bytes[dataAddress+3], bytes[dataAddress+2],
+             bytes[dataAddress+1], bytes[dataAddress]} <= writeData;
         end
     end
 endmodule
 
 
-// ===================== 5. Tinker Core =======================
-// The pipeline has been completely rewritten. We keep the same
-// observable behaviour but the control‑path is now in lock‑step
-// with the course reference.
-module tinker_core(
-    input  wire clk,
-    input  wire reset,
-    output wire hlt
+module decoder(
+    input  [31:0] instruction,
+    output [4:0]  opcode,
+    output [4:0]  rd,
+    output [4:0]  rs,
+    output [4:0]  rt,
+    output [11:0] l
 );
-/* =============================================================
-   0. Program Counter / FETCH stage ---------------------------*/
-reg  [63:0] pcReg;             // current PC
-wire [63:0] pcPlus4 = pcReg + 64'd4;
-
-/* =============================================================
-   1. IF / ID pipeline reg -----------------------------------*/
-reg [31:0] if_id_instr;
-reg [63:0] if_id_pcPlus4;
-
-/* =============================================================
-   2. ID / EX pipeline reg -----------------------------------*/
-reg [4:0]  id_ex_op, id_ex_rd, id_ex_rs, id_ex_rt;
-reg [63:0] id_ex_A,  id_ex_B,  id_ex_C;
-reg [63:0] id_ex_seLit, id_ex_pcPlus4, id_ex_sp;
-reg        id_ex_rtPassed;
-
-/* =============================================================
-   3. EX / MEM pipeline reg ----------------------------------*/
-reg [4:0]  ex_mem_rd;
-reg [63:0] ex_mem_result, ex_mem_addr, ex_mem_newPC;
-reg        ex_mem_branch, ex_mem_wrReg, ex_mem_wrMem, ex_mem_hlt;
-
-/* =============================================================
-   4. MEM / WB pipeline reg ----------------------------------*/
-reg [4:0]  mem_wb_rd;
-reg [63:0] mem_wb_result;
-reg        mem_wb_wrReg, mem_wb_hlt;
-
-assign hlt = mem_wb_hlt;
-
-/* =============================================================
-   Instruction / Data memory ---------------------------------*/
-wire [31:0] fetchedInstr;
-wire [63:0] memReadData;
-
-memory memory(
-    .clk              (clk),
-    .pc               (pcReg),
-    .reset            (reset),
-    .mem_write_enable (ex_mem_wrMem),
-    .rw_val           (ex_mem_result), // store data
-    .rw_addr          (ex_mem_addr[31:0]),
-    .instruction      (fetchedInstr),
-    .r_out            (memReadData)
-);
-
-/* =============================================================
-   Decode -----------------------------------------------------*/
-wire [4:0] op_dec, rd_dec, rs_dec, rt_dec;  wire [11:0] l_dec;  wire rtPassed_dec;
-
-instruction_decoder DEC(
-    .instruction (if_id_instr),
-    .controlSignal(op_dec), .rd(rd_dec), .rs(rs_dec), .rt(rt_dec),
-    .L(l_dec), .rtPassed(rtPassed_dec)
-);
-
-wire [63:0] seLiteral = {{52{l_dec[11]}}, l_dec};
-
-/* Register file */
-wire [63:0] regA, regB, regC, stackPtr;
-
-register_file reg_file(
-    .clk          (clk), .reset(reset),
-    .write_enable (mem_wb_wrReg),
-    .dataInput    (mem_wb_result),
-    .readAddress1 (rs_dec), .readAddress2(rt_dec), .readAddress3(rd_dec),
-    .writeAddress (mem_wb_rd),
-    .lPassed      (~rtPassed_dec), .L(l_dec),
-    .value1       (regA), .value2(regB), .rdVal(regC), .r31_val(stackPtr)
-);
-
-/* =============================================================
-   5. Simple RAW hazard detector ------------------------------*/
-function automatic isWriteReg(input [4:0] op);
-    begin
-        case (op)
-            5'h08,5'h09,5'h0a,5'h0b,5'h0c,5'h0d,5'h0e,5'h0f,5'h13,5'h1F: isWriteReg = 0; // CTR‑flow, store, bubble
-            default:                   isWriteReg = 1;
-        endcase
-    end
-endfunction
-
-wire [63:0] signExtendedLiteral = {{52{L[11]}}, L};
-wire        local_hlt = (controlSignal==5'h0f) && (signExtendedLiteral[3:0]==4'h0);
-assign hlt = halted;
-
-wire hazard_IDEX = isWriteReg(id_ex_op) &&
-                   ((id_ex_rd == rs_dec) || (id_ex_rd == rt_dec) || (id_ex_rd == rd_dec));
-
-wire hazard_EX = ex_mem_wrReg &&
-                 ((ex_mem_rd == rs_dec) || (ex_mem_rd == rt_dec) || (ex_mem_rd == rd_dec));
-
-wire hazard_MEM = mem_wb_wrReg &&
-                  ((mem_wb_rd == rs_dec) || (mem_wb_rd == rt_dec) || (mem_wb_rd == rd_dec));
-
-wire fetchStall  = hazard_IDEX | hazard_EX | hazard_MEM;
-
-/* =============================================================
-   6. Branch flush detection ----------------------------------*/
-wire alu_branchTaken;
-
-/* =============================================================
-   7. Next‑state (IF/ID) --------------------------------------*/
-wire [31:0] next_if_instr   = (alu_branchTaken) ? 32'd0 : (fetchStall ? if_id_instr   : fetchedInstr);
-wire [63:0] next_if_pcPlus4 = (alu_branchTaken) ? 64'd0 : (fetchStall ? if_id_pcPlus4 : pcPlus4);
-
-/* =============================================================
-   8. ALU input muxes -----------------------------------------*/
-wire [63:0] aluIn1 = regA;
-wire [63:0] aluIn2 = rtPassed_dec ? regB : seLiteral;
-wire [63:0] aluIn3 = regC;
-
-/* =============================================================
-   9. ALU instance -------------------------------------------*/
-wire [63:0] aluResult, aluAddr, aluNewPC;
-wire        aluWriteReg, aluWriteMem, aluHalt;
-
-ALU ALU_I(
-    .opcode              (id_ex_op),
-    .inputDataOne        (aluIn1),
-    .inputDataTwo        (aluIn2),
-    .inputDataThree      (aluIn3),
-    .signExtendedLiteral (seLiteral),
-    .programCounter      (if_id_pcPlus4 - 64'd4), // PC of current instr
-    .stackPointer        (stackPtr),
-    .readMemory          (memReadData),
-    .result              (aluResult),
-    .readWriteAddress    (aluAddr),
-    .newProgramCounter   (aluNewPC),
-    .branchTaken         (alu_branchTaken),
-    .writeToRegister     (aluWriteReg),
-    .writeToMemory       (aluWriteMem),
-    .hlt                 (aluHalt)
-);
-
-/* =============================================================
-   10. Sequential logic ---------------------------------------*/
-localparam [4:0] BUBBLE_OP = 5'h1F;  wire bubble = fetchStall | alu_branchTaken;
-
-always @(posedge clk or posedge reset) begin
-    if (reset) begin
-        // PC & IF/ID
-        pcReg           <= 64'h2000;
-        if_id_instr     <= 32'd0;
-        if_id_pcPlus4   <= 64'd0;
-        // ID/EX
-        id_ex_op        <= BUBBLE_OP;
-        id_ex_rd        <= 5'd0;
-        id_ex_rs        <= 5'd0;
-        id_ex_rt        <= 5'd0;
-        id_ex_A         <= 64'd0;
-        id_ex_B         <= 64'd0;
-        id_ex_C         <= 64'd0;
-        id_ex_seLit     <= 64'd0;
-        id_ex_pcPlus4   <= 64'd0;
-        id_ex_sp        <= 64'd0;
-        id_ex_rtPassed  <= 1'b0;
-        // EX/MEM
-        ex_mem_rd       <= 5'd0;
-        ex_mem_result   <= 64'd0;
-        ex_mem_addr     <= 64'd0;
-        ex_mem_newPC    <= 64'd0;
-        ex_mem_branch   <= 1'b0;
-        ex_mem_wrReg    <= 1'b0;
-        ex_mem_wrMem    <= 1'b0;
-        ex_mem_hlt      <= 1'b0;
-        // MEM/WB
-        mem_wb_rd       <= 5'd0;
-        mem_wb_result   <= 64'd0;
-        mem_wb_wrReg    <= 1'b0;
-        mem_wb_hlt      <= 1'b0;
-    end else begin
-        /* PC update */
-        if (alu_branchTaken)      pcReg <= aluNewPC;
-        else if (!fetchStall)     pcReg <= pcPlus4;
-
-        /* IF/ID */
-        if_id_instr   <= next_if_instr;
-        if_id_pcPlus4 <= next_if_pcPlus4;
-
-        /* ID/EX (bubble injection) */
-        if (bubble) begin
-            id_ex_op <= BUBBLE_OP;
-        end else begin
-            id_ex_op <= op_dec;
-        end
-        id_ex_rd       <= rd_dec;
-        id_ex_rs       <= rs_dec;
-        id_ex_rt       <= rt_dec;
-        id_ex_A        <= regA;
-        id_ex_B        <= regB;
-        id_ex_C        <= regC;
-        id_ex_seLit    <= seLiteral;
-        id_ex_pcPlus4  <= if_id_pcPlus4;
-        id_ex_sp       <= stackPtr;
-        id_ex_rtPassed <= rtPassed_dec;
-
-        /* EX/MEM */
-        ex_mem_rd       <= id_ex_rd;
-        ex_mem_result   <= aluResult;
-        ex_mem_addr     <= aluAddr;
-        ex_mem_newPC    <= aluNewPC;
-        ex_mem_branch   <= alu_branchTaken;
-        ex_mem_wrReg    <= aluWriteReg;
-        ex_mem_wrMem    <= aluWriteMem;
-        ex_mem_hlt      <= aluHalt;
-
-        /* MEM/WB */
-        mem_wb_rd     <= ex_mem_rd;
-        mem_wb_result <= ex_mem_result;
-        mem_wb_wrReg  <= ex_mem_wrReg;
-        mem_wb_hlt    <= ex_mem_hlt;
-    end
-end
-endmodule
-
-// ===================== 6. Optional FPU ======================
-// Retained unmodified for compatibility with any standalone
-// floating‑point tests the user might have.
-module FPU(
-    input  wire [63:0] operand1,
-    input  wire [63:0] operand2,
-    input  wire [4:0]  opcode,
-    output reg  [63:0] result,
-    output reg         writeEnable
-);
-    always @(*) begin
-        case (opcode)
-            5'b10100: result = $realtobits($bitstoreal(operand1) + $bitstoreal(operand2));
-            5'b10101: result = $realtobits($bitstoreal(operand1) - $bitstoreal(operand2));
-            5'b10110: result = $realtobits($bitstoreal(operand1) * $bitstoreal(operand2));
-            5'b10111: result = $realtobits($bitstoreal(operand1) / $bitstoreal(operand2));
-            default:  result = 64'd0;
-        endcase
-        writeEnable = 1'b1;
-    end
+    assign opcode = instruction[31:27];
+    assign rd     = instruction[26:22];
+    assign rs     = instruction[21:17];
+    assign rt     = instruction[16:12];
+    assign l      = instruction[11:0];
 endmodule
