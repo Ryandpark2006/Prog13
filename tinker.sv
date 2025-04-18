@@ -734,7 +734,7 @@ assign hlt = mem_wb_hlt;
 wire [31:0] fetchedInstr;
 wire [63:0] memReadData;
 
-memory MEM(
+memory memory(
     .clk              (clk),
     .pc               (pcReg),
     .reset            (reset),
@@ -760,7 +760,7 @@ wire [63:0] seLiteral = {{52{l_dec[11]}}, l_dec};
 /* Register file */
 wire [63:0] regA, regB, regC, stackPtr;
 
-register_file RF(
+register_file reg_file(
     .clk          (clk), .reset(reset),
     .write_enable (mem_wb_wrReg),
     .dataInput    (mem_wb_result),
