@@ -188,44 +188,33 @@ module decoder (
 endmodule
 
 
-// ================================================================
-// tinker_core — corrected forwarding & 1‑cycle load‑use stall
-// ================================================================
 module tinker_core (
     input  wire clk,
     input  wire reset,
     output wire hlt
 );
 
-/* 0. pc & fetch ------------------------------------------------ */
 reg  [63:0] pc_reg;
 wire [63:0] pc_plus4 = pc_reg + 64'd4;
 
-/* pipe‑flush on taken branch */
 wire flush_if;
-
-/* 1. IF / ID ---------------------------------------------------*/
 reg [31:0] if_id_ir;
 reg [63:0] if_id_pc4;
 
-/* 2. ID / EX ---------------------------------------------------*/
 reg [4:0]  id_ex_op, id_ex_rd, id_ex_rs, id_ex_rt;
 reg [63:0] id_ex_a,  id_ex_b,  id_ex_c;
 reg [63:0] id_ex_imm, id_ex_pc4, id_ex_sp;
 
-/* 3. EX / MEM --------------------------------------------------*/
 reg [4:0]  ex_mem_op, ex_mem_rd;
 reg [63:0] ex_mem_res, ex_mem_addr, ex_mem_npc;
 reg        ex_mem_br, ex_mem_we_reg, ex_mem_we_mem, ex_mem_hlt;
 
-/* 4. MEM / WB --------------------------------------------------*/
 reg [4:0]  mem_wb_rd;
 reg [63:0] mem_wb_res;
 reg        mem_wb_we_reg, mem_wb_hlt;
 
 assign hlt = mem_wb_hlt;
 
-/* memory -------------------------------------------------------*/
 wire [31:0] instr_fetch;
 wire [63:0] mem_rdata;
 
@@ -239,7 +228,6 @@ memory memory (
     .data_out(mem_rdata)
 );
 
-/* decode -------------------------------------------------------*/
 wire [4:0] dec_op, dec_rd, dec_rs, dec_rt;
 wire [11:0] dec_lit;
 
@@ -250,7 +238,6 @@ decoder dec_unit (
 
 wire [63:0] imm_ext = {{52{dec_lit[11]}}, dec_lit};
 
-/* register file -----------------------------------------------*/
 wire [63:0] rf_a, rf_b, rf_c, sp_val;
 
 register_file reg_file (
@@ -262,18 +249,15 @@ register_file reg_file (
     .rd1(rf_a), .rd2(rf_b), .rd3(rf_c), .sp_val(sp_val)
 );
 
-/* ---------- forwarding (to EX stage) --------------------------*/
-/* does the instruction currently in EX write a destination? */
+// forwarding (to EX stage) 
 wire id_ex_we_reg = (id_ex_op != 5'h1f) && (id_ex_op != 5'h08) &&
                     (id_ex_op != 5'h09) && (id_ex_op != 5'h0a) &&
                     (id_ex_op != 5'h0b) && (id_ex_op != 5'h0c) &&
                     (id_ex_op != 5'h0d) && (id_ex_op != 5'h0e) &&
                     (id_ex_op != 5'h0f) && (id_ex_op != 5'h13);
 
-/* does the instruction in MEM load from memory? */
 wire ex_mem_is_load = (ex_mem_op == 5'h10);
 
-/* one‑cycle stall if load‑use hazard */
 wire load_use_hazard = ex_mem_is_load &&
                       ((ex_mem_rd == dec_rs) ||
                        (ex_mem_rd == dec_rt) ||
@@ -281,7 +265,7 @@ wire load_use_hazard = ex_mem_is_load &&
 
 wire stall_if = load_use_hazard;
 
-/* ----------- forwarding comparators (allow rd==0) -------------*/
+// forwarding comparators (allow rd==0)
 wire fwd_ex_rs  = (id_ex_we_reg && (id_ex_rd == dec_rs));
 wire fwd_mem_rs = (ex_mem_we_reg && (ex_mem_rd == dec_rs));
 wire fwd_wb_rs  = (mem_wb_we_reg && (mem_wb_rd == dec_rs));
@@ -310,7 +294,6 @@ wire [63:0] dec_c = fwd_ex_rd ? alu_out  :
 localparam [4:0] BUBBLE_OP = 5'h1f;
 wire bubble = flush_if;
 
-/* next‑state for ID/EX ----------------------------------------*/
 wire [4:0]  nxt_op  = bubble ? BUBBLE_OP : dec_op;
 wire [4:0]  nxt_rd  = bubble ? 5'd0      : dec_rd;
 wire [4:0]  nxt_rs  = bubble ? 5'd0      : dec_rs;
@@ -344,7 +327,6 @@ alu alu_inst (
 
 assign flush_if = alu_br;  // taken branch flushes next IF/ID
 
-/* EX/MEM latches ----------------------------------------------*/
 wire [4:0]  nxt_ex_mem_op   = id_ex_op;
 wire [4:0]  nxt_ex_mem_rd   = id_ex_rd;
 wire [63:0] nxt_ex_mem_res  = alu_out;
@@ -355,13 +337,11 @@ wire        nxt_ex_mem_we_r = alu_we_reg;
 wire        nxt_ex_mem_we_m = alu_we_mem;
 wire        nxt_ex_mem_hlt  = alu_hlt;
 
-/* MEM/WB latches ----------------------------------------------*/
 wire [4:0]  nxt_mem_wb_rd   = ex_mem_rd;
 wire [63:0] nxt_mem_wb_res  = ex_mem_res;
 wire        nxt_mem_wb_we_r = ex_mem_we_reg;
 wire        nxt_mem_wb_hlt  = ex_mem_hlt;
 
-/* sequential ---------------------------------------------------*/
 always @(posedge clk or posedge reset) begin
     if (reset) begin
         pc_reg <= 64'h2000;
