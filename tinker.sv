@@ -342,10 +342,59 @@ module tinker_core(
     input  wire        reset,
     output wire        hlt
 );
-    // … all your reg/wire declarations up through ALU instantiation …
-    // (unchanged: IF/ID, ID/EX, EX/MEM, MEM/WB regs, forwarding, etc.)
+    // Program Counter and Stall Counter
+    reg [63:0] PC;
+    reg [1:0]  stall_cnt;
 
-    // --- Memory instantiation now uses ALU’s outputs directly ---
+    // IF/ID Pipeline Registers
+    reg [63:0] IF_ID_PC;
+    reg [31:0] IF_ID_IR;
+
+    // Decoder outputs
+    wire [4:0]  IF_ctrl, IF_rd, IF_rs, IF_rt;
+    wire [11:0] IF_L;
+    wire        IF_rtPassed;
+
+    instruction_decoder dec(
+        .instruction  (IF_ID_IR),
+        .controlSignal(IF_ctrl),
+        .rd           (IF_rd),
+        .rs           (IF_rs),
+        .rt           (IF_rt),
+        .L            (IF_L),
+        .rtPassed     (IF_rtPassed)
+    );
+
+    // Hazard detection (load-use)
+    wire load_use_hazard =
+        (EX_MEM_ctrl == 5'b10000) && (
+            (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rs) ||
+            (IF_ctrl != 5'b00000 && EX_MEM_rd == IF_rt && IF_rtPassed)
+        );
+
+    // ID/EX Pipeline Registers
+    reg [63:0] ID_EX_PC;
+    reg [4:0]  ID_EX_ctrl, ID_EX_rd, ID_EX_rs, ID_EX_rt;
+    reg [11:0] ID_EX_L;
+    reg        ID_EX_rtPassed;
+    reg [63:0] ID_EX_A, ID_EX_B;
+    reg [63:0] ID_EX_r31, ID_EX_rdVal;
+
+    // EX/MEM Pipeline Registers
+    reg [4:0]  EX_MEM_ctrl, EX_MEM_rd;
+    reg [63:0] EX_MEM_ALU, EX_MEM_B;
+    reg        EX_MEM_memWrite, EX_MEM_regWrite, EX_MEM_changePC;
+    reg [31:0] EX_MEM_addr;
+    reg [63:0] EX_MEM_wrData, EX_MEM_target;
+    reg [63:0] EX_MEM_sp_new;
+
+    // MEM/WB Pipeline Registers
+    reg [4:0]  MEM_WB_ctrl, MEM_WB_rd;
+    reg [63:0] MEM_WB_ALU, MEM_WB_memData;
+    reg        MEM_WB_regWrite, MEM_WB_memToReg;
+    reg [63:0] MEM_WB_sp_new;
+
+    // Memory (instruction + data)
     wire [31:0] inst;
     wire [63:0] mem_rdata;
     memory memory_inst(
@@ -359,7 +408,39 @@ module tinker_core(
         .r_out            (mem_rdata)
     );
 
-    // --- ALU instance with sp_new port hooked up ---
+    // Register file
+    wire [63:0] regOut1, regOut2, rdValSignal, r31Val;
+
+    // Forwarding logic
+    wire forwardA_EX  = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs);
+    wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs);
+    wire forwardB_EX  = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rt) && ID_EX_rtPassed;
+    wire forwardB_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rt) && ID_EX_rtPassed;
+    wire forwardRD_EX = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rd);
+    wire forwardRD_MEM= MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rd);
+
+    wire [63:0] forwarded_A =
+        forwardA_EX  ? EX_MEM_ALU :
+        forwardA_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+                       ID_EX_A;
+
+    wire [63:0] forwarded_B =
+        forwardB_EX  ? EX_MEM_ALU :
+        forwardB_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+                       ID_EX_B;
+
+    wire [63:0] forwarded_rdVal =
+        forwardRD_EX  ? EX_MEM_ALU :
+        forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
+                        ID_EX_rdVal;
+
+    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011)
+                        ? forwarded_rdVal : forwarded_A;
+    wire [63:0] aluOp2 = ID_EX_rtPassed
+                        ? forwarded_B
+                        : {{52{ID_EX_L[11]}}, ID_EX_L};
+
+    // ALU instance (now with sp_new)
     wire [63:0] aluResult, aluUpdatedNext, aluSpNew;
     wire        aluRegWrite, aluMemWrite, aluChangePC;
     wire [31:0] aluAddr;
@@ -383,30 +464,66 @@ module tinker_core(
         .sp_new           (aluSpNew)
     );
 
-    // … EX/MEM pipeline update (now also pipelines sp_new) …
-    reg [63:0] EX_MEM_sp_new;
+    // Pipeline registers: EX → MEM (including sp_new)
     always @(posedge clk or posedge reset) begin
-        if (reset) EX_MEM_sp_new <= 0;
-        else       EX_MEM_sp_new <= aluSpNew;
+        if (reset) begin
+            EX_MEM_ctrl     <= 0;
+            EX_MEM_rd       <= 0;
+            EX_MEM_ALU      <= 0;
+            EX_MEM_B        <= 0;
+            EX_MEM_memWrite <= 0;
+            EX_MEM_regWrite <= 0;
+            EX_MEM_addr     <= 0;
+            EX_MEM_wrData   <= 0;
+            EX_MEM_changePC <= 0;
+            EX_MEM_target   <= 0;
+            EX_MEM_sp_new   <= 0;
+        end else begin
+            EX_MEM_ctrl     <= ID_EX_ctrl;
+            EX_MEM_rd       <= ID_EX_rd;
+            EX_MEM_ALU      <= aluResult;
+            EX_MEM_B        <= ID_EX_B;
+            EX_MEM_memWrite <= aluMemWrite;
+            EX_MEM_regWrite <= aluRegWrite;
+            EX_MEM_addr     <= aluAddr;
+            EX_MEM_wrData   <= aluWrData;
+            EX_MEM_changePC <= aluChangePC;
+            EX_MEM_target   <= aluUpdatedNext;
+            EX_MEM_sp_new   <= aluSpNew;
+        end
     end
 
-    // … MEM/WB pipeline update (including SP) …
-    reg [63:0] MEM_WB_sp_new;
+    // Pipeline registers: MEM → WB (including sp_new)
     always @(posedge clk or posedge reset) begin
-        if (reset) MEM_WB_sp_new <= 0;
-        else       MEM_WB_sp_new <= EX_MEM_sp_new;
+        if (reset) begin
+            MEM_WB_ctrl     <= 0;
+            MEM_WB_rd       <= 0;
+            MEM_WB_ALU      <= 0;
+            MEM_WB_memData  <= 0;
+            MEM_WB_regWrite <= 0;
+            MEM_WB_memToReg <= 0;
+            MEM_WB_sp_new   <= 0;
+        end else begin
+            MEM_WB_ctrl     <= EX_MEM_ctrl;
+            MEM_WB_rd       <= EX_MEM_rd;
+            MEM_WB_ALU      <= EX_MEM_ALU;
+            MEM_WB_memData  <= mem_rdata;
+            MEM_WB_regWrite <= EX_MEM_regWrite;
+            MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
+            MEM_WB_sp_new   <= EX_MEM_sp_new;
+        end
     end
 
-    // … at writeback stage, override for call/return SP writes …
+    // Writeback override for call/return (stack‐pointer)
     wire is_call_or_ret =
          (MEM_WB_ctrl == 5'b01100)
       || (MEM_WB_ctrl == 5'b01101);
 
-    wire [4:0]  wb_addr  = is_call_or_ret ? 5'd31 : MEM_WB_rd;
-    wire        wb_en    = MEM_WB_regWrite || is_call_or_ret;
-    wire [63:0] wb_data  = is_call_or_ret
-                          ? MEM_WB_sp_new
-                          : (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU);
+    wire [4:0]  wb_addr = is_call_or_ret ? 5'd31 : MEM_WB_rd;
+    wire        wb_en   = MEM_WB_regWrite || is_call_or_ret;
+    wire [63:0] wb_data = is_call_or_ret
+                         ? MEM_WB_sp_new
+                         : (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU);
 
     register_file reg_file(
         .clk         (clk),
@@ -425,102 +542,36 @@ module tinker_core(
         .r31_val     (r31Val)
     );
 
+    // PC and IF/ID update with stalls and branch redirects
+    initial begin
+        PC          = 64'h2000;
+        stall_cnt   = 0;
+        IF_ID_PC    = 0;
+        IF_ID_IR    = 0;
+    end
 
-    // Forwarding logic (EX/MEM has priority over MEM/WB)
-    wire forwardA_EX  = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs);
-    wire forwardA_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs);
-
-    wire forwardB_EX  = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rt) && ID_EX_rtPassed;
-    wire forwardB_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rt) && ID_EX_rtPassed;
-
-    wire forwardRD_EX  = EX_MEM_regWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rd);
-    wire forwardRD_MEM = MEM_WB_regWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rd);
-
-    wire [63:0] forwarded_A =
-        forwardA_EX  ? EX_MEM_ALU :
-        forwardA_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-        ID_EX_A;
-
-    wire [63:0] forwarded_B =
-        forwardB_EX  ? EX_MEM_ALU :
-        forwardB_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-        ID_EX_B;
-
-    wire [63:0] forwarded_rdVal =
-        forwardRD_EX  ? EX_MEM_ALU :
-        forwardRD_MEM ? (MEM_WB_memToReg ? MEM_WB_memData : MEM_WB_ALU) :
-        ID_EX_rdVal;
-
-    wire [63:0] aluOp1 = (ID_EX_ctrl == 5'b11001 || ID_EX_ctrl == 5'b11011) ? forwarded_rdVal : forwarded_A;
-    wire [63:0] aluOp2 = ID_EX_rtPassed ? forwarded_B : {{52{ID_EX_L[11]}}, ID_EX_L};
-
-    // ALU instance
-    wire [63:0] aluResult, aluUpdatedNext;
-    wire        aluRegWrite, aluMemWrite, aluChangePC;
-    wire [31:0] aluAddr;
-    wire [63:0] aluWrData;
-    ALU ALU_INST(
-        .pc               (ID_EX_PC),
-        .rdVal            (ID_EX_rdVal),
-        .operand1         (aluOp1),
-        .operand2         (aluOp2),
-        .opcode           (ID_EX_ctrl),
-        .r_out            (mem_rdata),
-        .r31_val          (ID_EX_r31),
-        .result           (aluResult),
-        .writeEnable      (aluRegWrite),
-        .mem_write_enable (aluMemWrite),
-        .rw_addr          (aluAddr),
-        .rw_val           (aluWrData),
-        .updated_next     (aluUpdatedNext),
-        .changing_pc      (aluChangePC)
-    );
-
-    // Debug instrumentation
-    integer cycle_count;
-    initial cycle_count = 0;
-
-    // PC and IF/ID update logic with robust stall and flush handling
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             PC        <= 64'h2000;
             stall_cnt <= 0;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
-            cycle_count <= 0;
-        end
-        else if (stall_cnt != 0) begin
+        end else if (stall_cnt != 0) begin
             stall_cnt <= stall_cnt - 1;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 32'h00000000;
-        end
-        else if (load_use_hazard && stall_cnt == 0) begin
+        end else if (load_use_hazard) begin
             stall_cnt <= 1;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 32'h00000000;
-        end
-        else if (EX_MEM_changePC) begin
+        end else if (EX_MEM_changePC) begin
             PC        <= EX_MEM_target;
             IF_ID_PC  <= 0;
             IF_ID_IR  <= 0;
-        end
-        else begin
+        end else begin
             PC        <= PC + 4;
             IF_ID_PC  <= PC;
             IF_ID_IR  <= inst;
-        end
-
-        // Debug output
-        cycle_count <= cycle_count + 1;
-        if (cycle_count <= 15) begin
-            $display("CYCLE %0d --------------------------------", cycle_count);
-            $display("  PC               = 0x%016h", PC);
-            $display("  IF/ID.inst       = 0x%08h", IF_ID_IR);
-            $display("  ID/EX.Rs1=%0d data=0x%016h, Rs2=%0d data=0x%016h", ID_EX_rs, ID_EX_A, ID_EX_rt, ID_EX_B);
-            $display("  EX_MEM.changePC=%b updated_next=0x%016h", EX_MEM_changePC, EX_MEM_target);
-            $display("  EX_MEM.rd=%0d alu=0x%016h", EX_MEM_rd, EX_MEM_ALU);
-            $display("  MEM_WB.rd=%0d wb=0x%016h", MEM_WB_rd, MEM_WB_ALU);
-            $display("");
         end
     end
 
@@ -553,52 +604,6 @@ module tinker_core(
         end
     end
 
-    // EX/MEM register update
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            EX_MEM_ctrl     <= 0;
-            EX_MEM_rd       <= 0;
-            EX_MEM_ALU      <= 0;
-            EX_MEM_B        <= 0;
-            EX_MEM_memWrite <= 0;
-            EX_MEM_regWrite <= 0;
-            EX_MEM_addr     <= 0;
-            EX_MEM_wrData   <= 0;
-            EX_MEM_changePC <= 0;
-            EX_MEM_target   <= 0;
-        end else begin
-            EX_MEM_ctrl     <= ID_EX_ctrl;
-            EX_MEM_rd       <= ID_EX_rd;
-            EX_MEM_ALU      <= aluResult;
-            EX_MEM_B        <= ID_EX_B;
-            EX_MEM_memWrite <= aluMemWrite;
-            EX_MEM_regWrite <= aluRegWrite;
-            EX_MEM_addr     <= aluAddr;
-            EX_MEM_wrData   <= aluWrData;
-            EX_MEM_changePC <= aluChangePC;
-            EX_MEM_target   <= aluUpdatedNext;
-        end
-    end
-
-    // MEM/WB register update
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            MEM_WB_ctrl     <= 0;
-            MEM_WB_rd       <= 0;
-            MEM_WB_ALU      <= 0;
-            MEM_WB_memData  <= 0;
-            MEM_WB_regWrite <= 0;
-            MEM_WB_memToReg <= 0;
-        end else begin
-            MEM_WB_ctrl     <= EX_MEM_ctrl;
-            MEM_WB_rd       <= EX_MEM_rd;
-            MEM_WB_ALU      <= EX_MEM_ALU;
-            MEM_WB_memData  <= mem_rdata;
-            MEM_WB_regWrite <= EX_MEM_regWrite;
-            MEM_WB_memToReg <= (EX_MEM_ctrl == 5'b10000);
-        end
-    end
-
     // Halt logic
     reg halt_flag;
     always @(posedge clk or posedge reset) begin
@@ -610,3 +615,9 @@ module tinker_core(
     assign hlt = halt_flag;
 
 endmodule
+
+
+
+
+
+
