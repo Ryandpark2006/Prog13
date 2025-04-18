@@ -87,8 +87,9 @@ module ALU(
                 writeEnable      = 1'b0;
                 changing_pc      = 1'b1;
                 mem_write_enable = 1'b1;
-                rw_addr          = r31_val - 8;
-                updated_next     = r_out;
+                // rw_addr          = r31_val - 8;
+                // updated_next     = r_out;
+                updated_next     = 64'h2000; // hardcoded for test
 
             end
             5'b01100: begin // call
