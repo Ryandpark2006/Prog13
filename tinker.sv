@@ -462,5 +462,15 @@ module tinker_core(
         end
     end
 
-    assign hlt = (MEM_WB_ctrl == 5'h0f); // halt detection
+    // assign hlt = (MEM_WB_ctrl == 5'h0f); // halt detection
+    reg halt_flag;
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            halt_flag <= 0;
+        else if (MEM_WB_ctrl == 5'h0f)
+            halt_flag <= 1;
+    end
+
+    assign hlt = halt_flag;
+
 endmodule
